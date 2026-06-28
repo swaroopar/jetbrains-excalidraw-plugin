@@ -1,0 +1,46 @@
+version: 2
+
+# Dependabot keeps the plugin's two dependency surfaces up to date:
+#   - Gradle (root): the IntelliJ Platform Gradle plugin + Kotlin/Java libs.
+#   - npm (/excalidraw-bundle): @excalidraw/excalidraw, React and the webpack
+#     toolchain that build the bundled web app.
+# Updates are grouped (minor + patch together) to keep PR noise low; majors
+# still open as individual PRs so breaking changes are reviewed in isolation.
+updates:
+  - package-ecosystem: "gradle"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Europe/Berlin"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "gradle"
+    commit-message:
+      prefix: "build(deps)"
+    groups:
+      gradle-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "npm"
+    directory: "/excalidraw-bundle"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Europe/Berlin"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "javascript"
+    commit-message:
+      prefix: "build(deps)"
+    groups:
+      npm-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
