@@ -172,6 +172,11 @@ class PngEditorIntegrationTest {
             debounceExecutor = {}
         )
         editorHolder = editor
+        // Establish the unedited baseline (initial onChange on scene load); a
+        // non-empty scene so the empty-elements edit below counts as a real change.
+        bridge.simulateSceneChange(
+            """{"type":"sceneChange","elements":[{"type":"__baseline__"}],"appState":{}}"""
+        )
 
         // Trigger a scene change so currentSceneJson is set
         val scenePayload =

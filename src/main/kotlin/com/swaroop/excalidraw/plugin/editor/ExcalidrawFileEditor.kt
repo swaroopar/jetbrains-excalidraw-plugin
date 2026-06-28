@@ -1,6 +1,7 @@
 package com.swaroop.excalidraw.plugin.editor
 
 import com.google.gson.Gson
+import com.google.gson.JsonArray
 import com.intellij.notification.Notification
 import com.intellij.notification.NotificationType
 import com.intellij.notification.Notifications
@@ -356,6 +357,24 @@ class ExcalidrawFileEditor private constructor(
     private var _modified: Boolean = false
 
     /**
+     * Canonical element content of the loaded (or last-saved) scene, used to tell a
+     * real user edit apart from a no-op [onSceneChanged].
+     *
+     * Excalidraw fires `onChange` not only on edits but also on the initial scene
+     * load and on theme/font re-renders, selection, scroll, etc. Persisting those
+     * would rewrite the file on mere open — and because `.excalidraw.png` files are
+     * re-encoded on export, that shows up as a spurious git change for every file
+     * opened. We therefore only mark the editor modified / schedule an autosave when
+     * the element content differs from this baseline (volatile per-element fields are
+     * stripped — see [canonicalElements]).
+     *
+     * Null until the first [onSceneChanged] establishes the baseline from the loaded
+     * scene. Written exclusively on the EDT (AD-05).
+     */
+    @Volatile
+    private var baselineElements: String? = null
+
+    /**
      * The most-recently received scene state, serialised as a JSON string via
      * [Gson.toJson]. Null until the first [onSceneChanged] call.
      *
@@ -543,15 +562,34 @@ class ExcalidrawFileEditor private constructor(
     fun onSceneChanged(scene: SceneChangeMessage) {
         val work: () -> Unit = {
             currentSceneJson = GSON.toJson(scene)
-            val wasModified = _modified
-            _modified = true
-            if (!wasModified) {
-                // FileEditor.getPropModified() returns "modified" — use the method
-                // instead of a non-existent PROP_MODIFIED field (IntelliJ API).
-                propertyChangeSupport.firePropertyChange(FileEditor.getPropModified(), false, true)
+            val newCanonical = canonicalElements(scene.elements)
+            val baseline = baselineElements
+            when {
+                baseline == null -> {
+                    // First change after load: this reflects the unedited scene
+                    // (Excalidraw fires onChange once the loaded scene renders).
+                    // Record it as the baseline; do NOT mark modified or write —
+                    // opening a file must not change it on disk.
+                    baselineElements = newCanonical
+                }
+                newCanonical == baseline -> {
+                    // No element-content change (theme/font re-render, selection,
+                    // scroll, …). Keep the latest scene JSON but do not persist.
+                }
+                else -> {
+                    // Genuine user edit: advance the baseline and schedule a save.
+                    baselineElements = newCanonical
+                    val wasModified = _modified
+                    _modified = true
+                    if (!wasModified) {
+                        // FileEditor.getPropModified() returns "modified" — use the method
+                        // instead of a non-existent PROP_MODIFIED field (IntelliJ API).
+                        propertyChangeSupport.firePropertyChange(FileEditor.getPropModified(), false, true)
+                    }
+                    // Schedule (or reschedule) the debounced auto-save (task-04-004, AC-E3-01).
+                    scheduleAutosave()
+                }
             }
-            // Schedule (or reschedule) the debounced auto-save (task-04-004, AC-E3-01).
-            scheduleAutosave()
         }
 
         val application = ApplicationManager.getApplication()
@@ -560,6 +598,25 @@ class ExcalidrawFileEditor private constructor(
         } else {
             work()
         }
+    }
+
+    /**
+     * Returns a stable string representation of [elements] for change detection,
+     * with per-element fields that churn without a meaningful content change
+     * (`version`, `versionNonce`, `updated`) removed. Operates on a deep copy so the
+     * incoming [elements] are not mutated.
+     */
+    private fun canonicalElements(elements: JsonArray): String {
+        val copy = elements.deepCopy()
+        for (element in copy) {
+            if (element.isJsonObject) {
+                val obj = element.asJsonObject
+                obj.remove("version")
+                obj.remove("versionNonce")
+                obj.remove("updated")
+            }
+        }
+        return copy.toString()
     }
 
     /**

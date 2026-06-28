@@ -8,6 +8,84 @@
       content="default-src 'self' excalidraw:; script-src 'self' 'unsafe-inline' 'unsafe-eval' excalidraw:; style-src 'self' 'unsafe-inline' excalidraw:; img-src 'self' data: blob: excalidraw:; font-src 'self' data: excalidraw:; connect-src 'self' data: blob: excalidraw:; worker-src 'self' blob: excalidraw:;"
     />
     <title>Excalidraw</title>
+    <!--
+      Canvas-font loading for the excalidraw:// webview.
+
+      The page is served from the non-special `excalidraw://` scheme, whose
+      document origin is opaque ("null"). That makes every URL-based font load
+      (fetch / FontFace(url) / @font-face url()) cross-origin, which Chromium
+      blocks before it reaches our scheme handler — so Excalidraw's fonts
+      (Excalifont, Nunito, Comic Shanns, …) never load and text falls back.
+
+      Fix, in two parts (both below, before bundle.js runs):
+        1) fonts-embed.js defines window.__EXCALIDRAW_FONT_BYTES__ — a map of
+           "fonts/<Family>/<file>.woff2" -> base64 woff2 bytes (built by webpack).
+        2) The inline script patches FontFace so that when Excalidraw builds a
+           face from a "fonts/…woff2" URL, we construct it from the embedded
+           ArrayBuffer instead — no network, no CORS, no origin involved.
+           Excalidraw's family name + descriptors (incl. unicode-range) are
+           preserved untouched.
+
+      We also shim URL + set EXCALIDRAW_ASSET_PATH so Excalidraw produces
+      "fonts/…" URLs for the patch to match (and without the shim, setting the
+      asset path would throw on the "null" origin — see PatchedURL below).
+    -->
+    <script src="fonts-embed.js"></script>
+    <script>
+      (function () {
+        try {
+          // Document base from href (string-only; never calls `new URL`, so it
+          // cannot throw). e.g. excalidraw://app/index.html -> excalidraw://app/
+          var href = String(window.location.href).split("#")[0].split("?")[0];
+          var docBase = href.replace(/[^/]*$/, "");
+          if (docBase.charAt(docBase.length - 1) !== "/") docBase += "/";
+
+          // URL shim: Excalidraw's loader does `new URL(path, location.origin)`,
+          // and the opaque "null" origin makes that throw "Invalid base URL".
+          // Substitute the real document base for a null/empty base.
+          var NativeURL = window.URL;
+          var PatchedURL = function (url, base) {
+            if (base === undefined || base === null || base === "null" || base === "") {
+              return new NativeURL(url, docBase);
+            }
+            return new NativeURL(url, base);
+          };
+          Object.setPrototypeOf(PatchedURL, NativeURL);
+          PatchedURL.prototype = NativeURL.prototype;
+          window.URL = PatchedURL;
+          // Make Excalidraw build local "fonts/…" URLs (intercepted below).
+          window.EXCALIDRAW_ASSET_PATH = docBase;
+
+          // FontFace patch: build faces from embedded bytes instead of URLs.
+          var BYTES = window.__EXCALIDRAW_FONT_BYTES__ || {};
+          var NativeFontFace = window.FontFace;
+          if (NativeFontFace) {
+            var b64ToBuf = function (b64) {
+              var bin = atob(b64);
+              var len = bin.length;
+              var bytes = new Uint8Array(len);
+              for (var i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
+              return bytes.buffer;
+            };
+            var PatchedFontFace = function (family, source, descriptors) {
+              if (typeof source === "string") {
+                var m = source.match(/fonts\/[A-Za-z0-9_\-./]+\.woff2/);
+                if (m && BYTES[m[0]]) {
+                  return new NativeFontFace(family, b64ToBuf(BYTES[m[0]]), descriptors);
+                }
+              }
+              return new NativeFontFace(family, source, descriptors);
+            };
+            Object.setPrototypeOf(PatchedFontFace, NativeFontFace);
+            PatchedFontFace.prototype = NativeFontFace.prototype;
+            window.FontFace = PatchedFontFace;
+          }
+        } catch (e) {
+          // On any failure leave everything untouched: Excalidraw falls back to
+          // a system font — no worse than before, never a hard failure.
+        }
+      })();
+    </script>
     <style>
       * {
         box-sizing: border-box;

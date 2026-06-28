@@ -108,7 +108,15 @@ class PngEditorSaveTest {
         )
 
         editorHolder = editor
+        bridge.simulateSceneChange(BASELINE_PAYLOAD)
         return Triple(editor, bridge, fakePersistence)
+    }
+
+    private companion object {
+        // Unedited-baseline scene (mirrors the initial onChange on scene load).
+        // Non-empty so the tests' empty-elements edit payload counts as a change.
+        const val BASELINE_PAYLOAD =
+            """{"type":"sceneChange","elements":[{"type":"__baseline__"}],"appState":{}}"""
     }
 
     // -------------------------------------------------------------------------
@@ -149,6 +157,7 @@ class PngEditorSaveTest {
             debounceExecutor = {}
         )
         editorHolder = editor
+        bridgeForScene.simulateSceneChange(BASELINE_PAYLOAD)
 
         // Trigger a scene change so currentSceneJson is set
         val scenePayload =
@@ -283,6 +292,7 @@ class PngEditorSaveTest {
             debounceExecutor = {}
         )
         editorHolder = editor
+        bridge.simulateSceneChange(BASELINE_PAYLOAD)
 
         // Set currentSceneJson
         val scenePayload =
@@ -342,6 +352,7 @@ class PngEditorSaveTest {
             debounceExecutor = {}
         )
         editorHolder = editor
+        bridge.simulateSceneChange(BASELINE_PAYLOAD)
 
         val scenePayload =
             """{"type":"sceneChange","elements":[],"appState":{"viewBackgroundColor":"#ffffff"}}"""

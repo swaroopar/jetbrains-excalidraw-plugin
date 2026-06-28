@@ -76,7 +76,16 @@ class ExcalidrawFileEditorEditTest {
         )
 
         editorHolder = editor
+        // Establish the unedited baseline (mirrors the initial onChange Excalidraw
+        // fires when a scene loads), so subsequent distinct payloads count as real
+        // edits. Uses an element type none of the test payloads use.
+        bridge.simulateSceneChange(BASELINE_PAYLOAD)
         return editor to bridge
+    }
+
+    private companion object {
+        const val BASELINE_PAYLOAD =
+            """{"type":"sceneChange","elements":[{"type":"__baseline__"}],"appState":{}}"""
     }
 
     // -------------------------------------------------------------------------
