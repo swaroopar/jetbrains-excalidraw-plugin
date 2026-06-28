@@ -2,13 +2,18 @@ package com.swaroop.excalidraw.plugin.jcef
 
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.diagnostic.logger
+import com.intellij.util.concurrency.EdtScheduledExecutorService
 import com.intellij.ui.jcef.JBCefApp
 import com.intellij.ui.jcef.JBCefBrowser
 import org.cef.browser.CefBrowser
 import org.cef.browser.CefFrame
 import org.cef.callback.CefSchemeRegistrar
+import org.cef.handler.CefLoadHandler
 import org.cef.handler.CefLoadHandlerAdapter
 import org.cef.network.CefRequest
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import javax.swing.JComponent
 
 /**
@@ -54,6 +59,17 @@ class ExcalidrawJcefHost private constructor(
          * NFR1: no `http://` or `https://` in this constant or anywhere in this class.
          */
         const val START_URL: String = "excalidraw://app/index.html"
+
+        private val LOG = logger<ExcalidrawJcefHost>()
+
+        /**
+         * Max number of times to reload [START_URL] when the initial navigation fails
+         * because the `excalidraw://` scheme isn't registered yet (startup race).
+         */
+        private const val MAX_SCHEME_RELOADS: Int = 20
+
+        /** Delay between scheme-not-ready reload attempts (ms). */
+        private const val SCHEME_RELOAD_DELAY_MS: Int = 250
 
         /**
          * Production constructor — creates a real [JBCefBrowser].
@@ -110,6 +126,13 @@ class ExcalidrawJcefHost private constructor(
     private var fired: Boolean = false
 
     /**
+     * Counts reload attempts triggered by [START_URL] failing to load because the
+     * `excalidraw://` scheme handler is not registered yet (startup race — see
+     * [registerLoadHandler]). Bounded by [MAX_SCHEME_RELOADS].
+     */
+    private val schemeReloadAttempts = AtomicInteger(0)
+
+    /**
      * Registers a [CefLoadHandlerAdapter] on the underlying browser that will call
      * [fireLoadEnd] when JCEF emits its page-load-complete event.
      * Only called in production mode — test mode uses direct [fireLoadEnd] invocation.
@@ -128,9 +151,59 @@ class ExcalidrawJcefHost private constructor(
                         fireLoadEnd()
                     }
                 }
+
+                override fun onLoadError(
+                    cefBrowser: CefBrowser?,
+                    frame: CefFrame?,
+                    errorCode: CefLoadHandler.ErrorCode?,
+                    errorText: String?,
+                    failedUrl: String?
+                ) {
+                    if (errorCode != null) {
+                        LOG.debug("Excalidraw: onLoadError errorCode=$errorCode url=$failedUrl")
+                    }
+                    if (shouldRetrySchemeLoad(frame?.isMain == true, failedUrl)) {
+                        // Retry on the EDT after a short delay; the `disposed` guard makes a
+                        // late-firing retry a no-op if the editor is closed meanwhile.
+                        EdtScheduledExecutorService.getInstance().schedule(
+                            { if (!disposed) browser.cefBrowser.loadURL(START_URL) },
+                            SCHEME_RELOAD_DELAY_MS.toLong(),
+                            TimeUnit.MILLISECONDS
+                        )
+                    }
+                }
             },
             browser.cefBrowser
         )
+    }
+
+    /**
+     * Decides whether a failed page load should trigger a reload of [START_URL].
+     *
+     * Returns true (and consumes one of the [MAX_SCHEME_RELOADS] attempts) only for a
+     * main-frame failure on the `excalidraw://` scheme while the host is alive. This is
+     * the startup-race recovery: a restored editor can navigate before
+     * [ExcalidrawSchemeHandlerRegistrar] registers the scheme, yielding
+     * `ERR_UNKNOWN_URL_SCHEME`; registration completes a moment later, so a bounded
+     * series of retries lets the page load without the user reopening the file.
+     *
+     * Extracted from the load handler so the decision (and its retry cap) is unit-testable
+     * without a live JCEF browser.
+     */
+    internal fun shouldRetrySchemeLoad(isMainFrame: Boolean, failedUrl: String?): Boolean {
+        if (!isMainFrame || disposed) return false
+        val isSchemeUrl = failedUrl == START_URL || failedUrl?.startsWith("$SCHEME://") == true
+        if (!isSchemeUrl) return false
+        val attempt = schemeReloadAttempts.incrementAndGet()
+        if (attempt > MAX_SCHEME_RELOADS) {
+            LOG.warn("Excalidraw: giving up loading $START_URL after $attempt attempts")
+            return false
+        }
+        LOG.info(
+            "Excalidraw: $START_URL failed to load (scheme likely not registered yet) — " +
+                "retry $attempt/$MAX_SCHEME_RELOADS"
+        )
+        return true
     }
 
     /**
