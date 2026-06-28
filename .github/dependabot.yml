@@ -1,0 +1,64 @@
+version: 2
+
+# Dependabot keeps the plugin's dependency surfaces up to date:
+#   - Gradle (root): the IntelliJ Platform Gradle plugin + Kotlin/Java libs.
+#   - npm (/excalidraw-bundle): @excalidraw/excalidraw, React and the webpack
+#     toolchain that build the bundled web app.
+#   - github-actions (/): the actions used by the CI/release workflows.
+# Dependabot always checks every update (major, minor and patch). Each
+# ecosystem groups ALL of them into a single PR (patterns "*", no update-type
+# filter) so every version bump is handled together.
+updates:
+  - package-ecosystem: "gradle"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Europe/Berlin"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "gradle"
+    commit-message:
+      prefix: "build(deps)"
+    groups:
+      gradle-all:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "npm"
+    directory: "/excalidraw-bundle"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Europe/Berlin"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "javascript"
+    commit-message:
+      prefix: "build(deps)"
+    groups:
+      npm-all:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Europe/Berlin"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "ci(deps)"
+    groups:
+      actions-all:
+        patterns:
+          - "*"
