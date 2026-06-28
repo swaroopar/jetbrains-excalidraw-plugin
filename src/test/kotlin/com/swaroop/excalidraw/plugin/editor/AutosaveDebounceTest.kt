@@ -97,7 +97,17 @@ class AutosaveDebounceTest {
         )
 
         editorHolder = editor
+        // Establish the unedited baseline (mirrors the initial onChange Excalidraw
+        // fires when a scene loads). Subsequent distinct scene changes are then
+        // treated as real edits. Uses an element type none of the tests use so it
+        // differs from every test payload.
+        bridge.simulateSceneChange(BASELINE_PAYLOAD)
         return Triple(editor, bridge, fakePersistence)
+    }
+
+    private companion object {
+        const val BASELINE_PAYLOAD =
+            """{"type":"sceneChange","elements":[{"type":"__baseline__"}],"appState":{}}"""
     }
 
     // -------------------------------------------------------------------------
