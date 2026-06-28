@@ -5,8 +5,9 @@ version: 2
 #   - npm (/excalidraw-bundle): @excalidraw/excalidraw, React and the webpack
 #     toolchain that build the bundled web app.
 #   - github-actions (/): the actions used by the CI/release workflows.
-# Updates are grouped (minor + patch together) to keep PR noise low; majors
-# still open as individual PRs so breaking changes are reviewed in isolation.
+# Dependabot always checks every update (major, minor and patch). Each
+# ecosystem groups ALL of them into a single PR (patterns "*", no update-type
+# filter) so every version bump is handled together.
 updates:
   - package-ecosystem: "gradle"
     directory: "/"
@@ -22,10 +23,9 @@ updates:
     commit-message:
       prefix: "build(deps)"
     groups:
-      gradle-minor-patch:
-        update-types:
-          - "minor"
-          - "patch"
+      gradle-all:
+        patterns:
+          - "*"
 
   - package-ecosystem: "npm"
     directory: "/excalidraw-bundle"
@@ -41,10 +41,9 @@ updates:
     commit-message:
       prefix: "build(deps)"
     groups:
-      npm-minor-patch:
-        update-types:
-          - "minor"
-          - "patch"
+      npm-all:
+        patterns:
+          - "*"
 
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -60,7 +59,6 @@ updates:
     commit-message:
       prefix: "ci(deps)"
     groups:
-      actions-minor-patch:
-        update-types:
-          - "minor"
-          - "patch"
+      actions-all:
+        patterns:
+          - "*"
