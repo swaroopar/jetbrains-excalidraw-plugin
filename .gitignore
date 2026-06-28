@@ -1,0 +1,28 @@
+# Build output
+build/
+.gradle/
+out/
+
+# Node / Excalidraw bundle
+node_modules/
+excalidraw-bundle/node_modules/
+src/main/resources/webview/
+
+# Worktrees created by the workflow
+.claude/worktrees/
+
+# Workflow runtime flag
+.claude/.workflow-active
+
+# OS / IDE
+.DS_Store
+
+# Gradle/IntelliJ plugin runtime caches
+.intellijPlatform/
+.kotlin/
+**/__pycache__/
+.claude
+CLAUDE.md
+kb/
+.mcp.json
+.idea/

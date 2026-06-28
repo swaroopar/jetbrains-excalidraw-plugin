@@ -1,0 +1,98 @@
+<!-- Plugin descriptor for the Excalidraw JetBrains plugin.
+     AD-4: all extension points are registered declaratively here — no
+     EP_NAME.registerExtension() at runtime. This allows the IDE class-loader
+     to resolve and lazy-load plugin classes efficiently. -->
+<idea-plugin>
+    <!-- Unique plugin identifier — must be stable across releases. -->
+    <id>com.swaroop.excalidraw.plugin</id>
+
+    <!-- Human-readable plugin name shown in the Plugins settings dialog. -->
+    <name>Excalidraw</name>
+
+    <!-- Vendor information shown in the Plugins settings dialog. -->
+    <vendor>Swaroop AR</vendor>
+
+    <!-- Minimum IDE build the plugin supports (sinceBuild=241 = 2024.1,
+         the first JBR line with stable JCEF). No absolute paths — value
+         is read from gradle.properties at build time by the IntelliJ
+         Platform Gradle Plugin v2. -->
+    <idea-version since-build="241"/>
+
+    <!-- Platform module dependency — required for all IntelliJ Platform plugins. -->
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+
+        <!-- Register the excalidraw:// custom scheme handler ONCE at app startup, before
+             JBCefApp is initialized. Registering it later (e.g. per editor) throws
+             "JBCefApp has already been initialized!" and the editor fails to open. -->
+        <applicationInitializedListener
+            implementation="com.swaroop.excalidraw.plugin.jcef.ExcalidrawSchemeHandlerRegistrar"/>
+
+        <!-- Register ExcalidrawFileType for .excalidraw files.
+             The 'name' attribute must match FileType.getName().
+             The 'fieldName' attribute names the static singleton field
+             (object declaration in Kotlin compiles to a static INSTANCE field). -->
+        <fileType
+            name="Excalidraw Drawing"
+            implementationClass="com.swaroop.excalidraw.plugin.filetype.ExcalidrawFileType"
+            fieldName="INSTANCE"
+            extensions="excalidraw"/>
+
+        <!-- Register ExcalidrawPngFileType for .excalidraw.png files.
+             Must use a filename PATTERN, not extensions: the platform derives an
+             extension from the last dot only ("png"), so extensions="excalidraw.png"
+             never matches and the file is treated as a generic PNG image. The wildcard
+             pattern "*.excalidraw.png" is a more specific matcher that wins over the
+             built-in PNG image type, so our editor opens instead of the image viewer. -->
+        <fileType
+            name="Excalidraw PNG Drawing"
+            implementationClass="com.swaroop.excalidraw.plugin.filetype.ExcalidrawPngFileType"
+            fieldName="INSTANCE"
+            patterns="*.excalidraw.png"/>
+
+        <!-- Register ExcalidrawFileEditorProvider as the custom editor for Excalidraw files.
+             AD-4: All extension points are declared here — no programmatic registration at runtime.
+             The IDE uses this declaration to discover and lazy-load the provider for
+             .excalidraw and .excalidraw.png files. -->
+        <fileEditorProvider
+            implementation="com.swaroop.excalidraw.plugin.editor.ExcalidrawFileEditorProvider"/>
+
+        <!-- Register the Excalidraw settings panel under Settings -> Tools -> Excalidraw.
+             ExcalidrawExtensionSettings is annotated with @Service(Service.Level.APP) and
+             self-registers via the platform service loader — no applicationService entry needed.
+             The Configurable class (ExcalidrawSettingsConfigurable) is resolved lazily at
+             IDE runtime; a forward-reference here does not affect buildPlugin (AC-E7-01). -->
+        <applicationConfigurable
+            parentId="tools"
+            instance="com.swaroop.excalidraw.plugin.settings.ExcalidrawSettingsConfigurable"
+            id="com.swaroop.excalidraw.plugin.settings"
+            displayName="Excalidraw"/>
+
+    </extensions>
+
+    <actions>
+
+        <!-- Export as SVG: available in the editor context menu when an Excalidraw
+             file is open. The action is enabled only when the active editor is an
+             ExcalidrawFileEditor (enforced by ExportSvgAction.update()). -->
+        <action id="Excalidraw.ExportSvg"
+                class="com.swaroop.excalidraw.plugin.export.ExportSvgAction"
+                text="Export as SVG"
+                description="Export the current Excalidraw drawing to an SVG file">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </action>
+
+        <!-- Export as PNG: available in the editor context menu when an Excalidraw
+             file is open. The action is enabled only when the active editor is an
+             ExcalidrawFileEditor (enforced by ExportPngAction.update()). -->
+        <action id="Excalidraw.ExportPng"
+                class="com.swaroop.excalidraw.plugin.export.ExportPngAction"
+                text="Export as PNG"
+                description="Export the current Excalidraw drawing to a PNG file">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </action>
+
+    </actions>
+
+</idea-plugin>
