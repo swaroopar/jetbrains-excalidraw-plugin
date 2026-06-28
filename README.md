@@ -1,5 +1,7 @@
 # Excalidraw Plugin for JetBrains IDEs
 
+![Excalidraw editor for JetBrains IDEs](assets/social-preview.png)
+
 A plugin for WebStorm and other IntelliJ-platform IDEs that provides a custom
 editor for `.excalidraw` and `.excalidraw.png` files. It renders the official
 [`@excalidraw/excalidraw`](https://github.com/excalidraw/excalidraw) web app
