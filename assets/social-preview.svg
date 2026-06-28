@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640">
+  <rect width="1280" height="640" fill="#ffffff"/>
+  <!-- icon mark (plug + pencil) on the left -->
+  <g transform="translate(120 95) scale(0.44)">
+    <g fill="none" stroke="#6965db" stroke-width="16" stroke-linecap="round" stroke-linejoin="miter" stroke-miterlimit="10">
+      <path d="M390 150 L390 300"/>
+      <path d="M610 150 L610 300"/>
+      <path d="M290 310 H710 Q750 310 750 350 V610 Q750 720 640 720 H360 Q250 720 250 610 V350 Q250 310 290 310 Z"/>
+      <path d="M430 720 V780"/>
+      <path d="M570 720 V780"/>
+      <path d="M430 780 H570"/>
+      <path d="M470 780 V850"/>
+      <path d="M530 780 V850"/>
+      <path d="M470 850 H530"/>
+      <g transform="rotate(45 500 510)">
+        <path d="M479 362 L479 380 L521 380 L521 362 Q521 348 500 348 Q479 348 479 362 Z"/>
+        <path d="M479 402 L521 402"/>
+        <path d="M479 380 L479 600"/>
+        <path d="M521 380 L521 600"/>
+        <path d="M500 408 L500 596"/>
+        <path d="M479 600 L490 652"/>
+        <path d="M521 600 L510 652"/>
+        <path d="M490 652 L510 652"/>
+        <path d="M490 652 L500 682 L510 652"/>
+      </g>
+    </g>
+  </g>
+  <!-- wordmark + tagline -->
+  <text x="600" y="280" font-family="Helvetica, Arial, sans-serif" font-size="96" font-weight="700" fill="#6965db">Excalidraw</text>
+  <text x="606" y="352" font-family="Helvetica, Arial, sans-serif" font-size="36" font-weight="400" fill="#555555">Excalidraw editor for JetBrains IDEs</text>
+  <text x="606" y="406" font-family="Helvetica, Arial, sans-serif" font-size="36" font-weight="400" fill="#555555">Edit .excalidraw files inside the IDE</text>
+</svg>
