@@ -89,6 +89,15 @@ tasks {
         dependsOn(buildWebBundle)
     }
 
+    // Same local-IDE nio-fs.jar bootclasspath workaround as the test task, so
+    // `./gradlew runIde` also works against a local macOS IDE bundle (localIdePath).
+    // No effect on CI (localIdePath is null there).
+    named<JavaExec>("runIde") {
+        if (localIdePath != null) {
+            jvmArgs("-Xbootclasspath/a:$localIdePath/lib/nio-fs.jar")
+        }
+    }
+
     test {
         useJUnitPlatform()
         systemProperty("user.dir", projectDir.absolutePath)

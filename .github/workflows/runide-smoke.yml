@@ -1,0 +1,83 @@
+name: runIde smoke test
+
+# Boots a real IDE (headless, under Xvfb) with the plugin installed via the
+# IntelliJ Platform `runIde` task and asserts the plugin loads cleanly:
+#   - the excalidraw:// scheme handler is registered at startup, and
+#   - no plugin-load problems are reported.
+# This catches plugin-descriptor / classloading regressions (since-build,
+# searchable-options, missing services, etc.) that unit tests can't see.
+#
+# It does not assert pixel-level font rendering: JCEF canvas rendering needs a
+# GPU/display and is unreliable headless. The font *loading* path is covered by
+# the unit tests + the embedded-bytes fix.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  runide-smoke:
+    name: runIde smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Xvfb
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      # Build first so the IDE SDK + web bundle are resolved/cached outside the
+      # timed boot below (the first SDK download can be slow).
+      - name: Build plugin
+        run: ./gradlew buildPlugin --no-configuration-cache
+
+      - name: Boot IDE with plugin (headless) and assert it loads
+        run: |
+          set -uo pipefail
+          # runIde never exits on its own; boot it for a bounded time, then kill it.
+          # Exit status of the timed-out command is ignored — we assert on the log.
+          timeout --preserve-status --signal=TERM --kill-after=30s 240s \
+            xvfb-run -a ./gradlew runIde --no-configuration-cache > runide.out 2>&1 || true
+
+          LOG=$(find build/idea-sandbox -name idea.log -path '*log*' | head -1)
+          echo "sandbox log: ${LOG:-<none>}"
+          if [ -z "${LOG:-}" ] || [ ! -f "$LOG" ]; then
+            echo "::error::No sandbox idea.log was produced — the IDE did not boot."
+            echo "----- gradle/runIde output (tail) -----"; tail -80 runide.out || true
+            exit 1
+          fi
+
+          echo "----- idea.log (tail) -----"; tail -60 "$LOG" || true
+
+          if ! grep -q "Registered excalidraw:// custom scheme handler factory" "$LOG"; then
+            echo "::error::Plugin did not register the excalidraw:// scheme handler — it failed to load."
+            echo "----- gradle/runIde output (tail) -----"; tail -80 runide.out || true
+            exit 1
+          fi
+
+          if grep -E "Problems found loading plugins|Plugin .* (failed to load|is incompatible)|Could not register the excalidraw" "$LOG"; then
+            echo "::error::Plugin load problems detected in the IDE log."
+            exit 1
+          fi
+
+          echo "PASS: IDE booted and the Excalidraw plugin loaded (scheme handler registered)."
+
+      - name: Upload IDE logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runide-smoke-logs
+          path: |
+            runide.out
+            build/idea-sandbox/**/log/idea.log
+          if-no-files-found: ignore
