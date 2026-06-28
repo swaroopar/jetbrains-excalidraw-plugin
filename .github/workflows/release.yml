@@ -1,0 +1,107 @@
+name: Release
+
+# Manually-triggered release. Pick the semantic bump (major / minor / maintenance);
+# the job runs the tests, computes the next version from the current pluginVersion,
+# bumps it, builds the plugin, creates an annotated tag and a GitHub Release whose
+# assets are the plugin distribution zip and the generated changelog.
+on:
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: "Which part of the version to bump for this release"
+        required: true
+        type: choice
+        default: minor
+        options:
+          - major          # X+1.0.0  — breaking changes
+          - minor          # X.Y+1.0  — new features
+          - maintenance    # X.Y.Z+1  — bug-fix / maintenance (patch)
+
+permissions:
+  contents: write   # push the version-bump commit + tag and create the release
+
+jobs:
+  release:
+    name: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # full history for changelog + previous-tag discovery
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      # Regular tests must pass before anything is tagged or released.
+      - name: Run tests
+        run: ./gradlew test --no-configuration-cache
+
+      - name: Compute next version
+        id: ver
+        run: |
+          current=$(grep -E '^pluginVersion=' gradle.properties | cut -d= -f2 | tr -d '[:space:]')
+          IFS='.' read -r major minor patch <<< "$current"
+          case "${{ inputs.release_type }}" in
+            major)       major=$((major + 1)); minor=0; patch=0 ;;
+            minor)       minor=$((minor + 1)); patch=0 ;;
+            maintenance) patch=$((patch + 1)) ;;
+            *) echo "Unknown release_type '${{ inputs.release_type }}'"; exit 1 ;;
+          esac
+          next="${major}.${minor}.${patch}"
+          {
+            echo "current=$current"
+            echo "next=$next"
+            echo "tag=v$next"
+          } >> "$GITHUB_OUTPUT"
+          echo "Releasing ${current} -> ${next} (tag v${next}, type=${{ inputs.release_type }})"
+
+      - name: Generate changelog
+        run: |
+          prev_tag=$(git tag --sort=-v:refname | head -n1)
+          if [ -n "$prev_tag" ]; then range="${prev_tag}..HEAD"; else range=""; fi
+          {
+            echo "## ${{ steps.ver.outputs.tag }}"
+            echo
+            if [ -n "$prev_tag" ]; then
+              echo "Changes since ${prev_tag}:"
+            else
+              echo "Initial release."
+            fi
+            echo
+            git log $range --no-merges --pretty=format:'- %s (%h)'
+            echo
+          } > CHANGELOG.md
+          echo "----- CHANGELOG.md -----"; cat CHANGELOG.md
+
+      - name: Bump pluginVersion
+        run: sed -i "s/^pluginVersion=.*/pluginVersion=${{ steps.ver.outputs.next }}/" gradle.properties
+
+      - name: Build plugin
+        run: ./gradlew buildPlugin --no-configuration-cache
+
+      - name: Commit version bump and create tag
+        run: |
+          git config user.name "Swaroop AR"
+          git config user.email "swaroop.ar@outlook.com"
+          git add gradle.properties
+          git commit -m "chore(release): ${{ steps.ver.outputs.tag }}"
+          git tag -a "${{ steps.ver.outputs.tag }}" -m "Release ${{ steps.ver.outputs.tag }}"
+          git push origin "HEAD:${{ github.ref_name }}"
+          git push origin "${{ steps.ver.outputs.tag }}"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.ver.outputs.tag }}" \
+            build/distributions/*.zip \
+            CHANGELOG.md \
+            --title "${{ steps.ver.outputs.tag }}" \
+            --notes-file CHANGELOG.md
