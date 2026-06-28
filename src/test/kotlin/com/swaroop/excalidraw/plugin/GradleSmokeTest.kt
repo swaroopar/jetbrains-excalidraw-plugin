@@ -109,13 +109,16 @@ class GradleSmokeTest {
     }
 
     @Test
-    fun `gradle wrapper properties references gradle 8`() {
+    fun `gradle wrapper references a gradle distribution`() {
         val wrapperProps = File(projectRoot, "gradle/wrapper/gradle-wrapper.properties")
         assertTrue(wrapperProps.exists(), "gradle/wrapper/gradle-wrapper.properties must exist")
         val content = wrapperProps.readText()
+        // Version-agnostic on purpose: the Gradle wrapper is bumped by Dependabot, so this
+        // asserts a well-formed gradle-<version> distribution URL rather than a specific
+        // major (which would fail on every wrapper upgrade).
         assertTrue(
-            content.contains("gradle-8"),
-            "Gradle wrapper must reference Gradle 8.x, content: $content"
+            Regex("""distributionUrl=.*gradle-\d+(\.\d+)*-(bin|all)\.zip""").containsMatchIn(content),
+            "Gradle wrapper must reference a gradle-<version> distribution, content: $content"
         )
     }
 
