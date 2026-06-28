@@ -1,9 +1,13 @@
 name: Release
 
 # Manually-triggered release. Pick the semantic bump (major / minor / maintenance);
-# the job runs the tests, computes the next version from the current pluginVersion,
-# bumps it, builds the plugin, creates an annotated tag and a GitHub Release whose
-# assets are the plugin distribution zip and the generated changelog.
+# the job runs the tests, computes the next version from the latest release tag,
+# builds the plugin at that version, creates an annotated tag and a GitHub Release
+# whose assets are the plugin distribution zip and the generated changelog.
+#
+# This workflow NEVER pushes to the (protected) main branch: the version is injected
+# into the build via -PpluginVersion, and the git tag is the source of truth for the
+# released version. So `main` is only ever updated through pull requests.
 on:
   workflow_dispatch:
     inputs:
@@ -18,7 +22,7 @@ on:
           - maintenance    # X.Y.Z+1  — bug-fix / maintenance (patch)
 
 permissions:
-  contents: write   # push the version-bump commit + tag and create the release
+  contents: write   # push the tag and create the release (NOT the main branch)
 
 jobs:
   release:
@@ -28,7 +32,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0          # full history for changelog + previous-tag discovery
+          fetch-depth: 0          # full history for changelog + tag discovery
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -46,7 +50,13 @@ jobs:
       - name: Compute next version
         id: ver
         run: |
-          current=$(grep -E '^pluginVersion=' gradle.properties | cut -d= -f2 | tr -d '[:space:]')
+          # Current released version = latest v* tag; fall back to gradle.properties.
+          prev_tag=$(git tag --list 'v*' --sort=-v:refname | head -n1)
+          if [ -n "$prev_tag" ]; then
+            current="${prev_tag#v}"
+          else
+            current=$(grep -E '^pluginVersion=' gradle.properties | cut -d= -f2 | tr -d '[:space:]')
+          fi
           IFS='.' read -r major minor patch <<< "$current"
           case "${{ inputs.release_type }}" in
             major)       major=$((major + 1)); minor=0; patch=0 ;;
@@ -56,7 +66,7 @@ jobs:
           esac
           next="${major}.${minor}.${patch}"
           {
-            echo "current=$current"
+            echo "prev_tag=$prev_tag"
             echo "next=$next"
             echo "tag=v$next"
           } >> "$GITHUB_OUTPUT"
@@ -64,36 +74,28 @@ jobs:
 
       - name: Generate changelog
         run: |
-          prev_tag=$(git tag --sort=-v:refname | head -n1)
-          if [ -n "$prev_tag" ]; then range="${prev_tag}..HEAD"; else range=""; fi
+          prev="${{ steps.ver.outputs.prev_tag }}"
+          if [ -n "$prev" ]; then range="${prev}..HEAD"; else range=""; fi
           {
             echo "## ${{ steps.ver.outputs.tag }}"
             echo
-            if [ -n "$prev_tag" ]; then
-              echo "Changes since ${prev_tag}:"
-            else
-              echo "Initial release."
-            fi
+            if [ -n "$prev" ]; then echo "Changes since ${prev}:"; else echo "Initial release."; fi
             echo
             git log $range --no-merges --pretty=format:'- %s (%h)'
             echo
           } > CHANGELOG.md
           echo "----- CHANGELOG.md -----"; cat CHANGELOG.md
 
-      - name: Bump pluginVersion
-        run: sed -i "s/^pluginVersion=.*/pluginVersion=${{ steps.ver.outputs.next }}/" gradle.properties
-
       - name: Build plugin
-        run: ./gradlew buildPlugin --no-configuration-cache
+        # Inject the version via -P so no version-bump commit is pushed to main; the tag
+        # is the source of truth. gradle.properties' pluginVersion is just the dev default.
+        run: ./gradlew buildPlugin -PpluginVersion=${{ steps.ver.outputs.next }} --no-configuration-cache
 
-      - name: Commit version bump and create tag
+      - name: Create tag
         run: |
           git config user.name "Swaroop AR"
           git config user.email "swaroop.ar@outlook.com"
-          git add gradle.properties
-          git commit -m "chore(release): ${{ steps.ver.outputs.tag }}"
           git tag -a "${{ steps.ver.outputs.tag }}" -m "Release ${{ steps.ver.outputs.tag }}"
-          git push origin "HEAD:${{ github.ref_name }}"
           git push origin "${{ steps.ver.outputs.tag }}"
 
       - name: Create GitHub Release
