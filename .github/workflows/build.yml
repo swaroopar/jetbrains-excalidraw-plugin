@@ -30,6 +30,13 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x gradlew
 
+      # Run the test suite on every push/PR. buildPlugin alone does NOT run tests
+      # (the IntelliJ 'buildPlugin' task does not depend on 'test'), so without this
+      # step CI would compile but never execute the tests — failures would only
+      # surface later in the release workflow.
+      - name: Run tests
+        run: ./gradlew test --no-configuration-cache
+
       # No -PlocalIdePath here: CI resolves the WebStorm SDK remotely via the
       # platformVersion declared in gradle.properties (see build.gradle.kts).
       - name: Build plugin
