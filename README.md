@@ -11,6 +11,17 @@ back to the file through the IDE's Virtual File System. The editor follows the
 IDE light/dark theme and can export to SVG/PNG. All assets are bundled and run
 locally — no drawing data leaves your machine.
 
+## Compatibility
+
+Requires a JetBrains IDE based on **IntelliJ Platform 2026.1 (build 261) or newer**
+— WebStorm, IntelliJ IDEA, PyCharm, etc. (`since-build = 261`, no upper bound).
+
+This minimum is required because the plugin relies on platform APIs that are only
+public/available from build 261 — notably the public JCEF custom-scheme registration
+(`JBCefApp.addCefCustomSchemeHandlerFactory`) used to load the bundled Excalidraw web
+app. The IDE must also ship JCEF in its JetBrains Runtime (the default on supported
+builds).
+
 ## Architecture
 
 High-level view of **every component** involved in opening and rendering a
