@@ -10,7 +10,7 @@ import java.util.Properties
  * Gradle Smoke Test for task-01-001.
  *
  * Verifies the Gradle project skeleton satisfies the acceptance criteria:
- *   - gradle.properties contains pluginSinceBuild=241
+ *   - gradle.properties contains pluginSinceBuild=261
  *   - gradle.properties contains javaVersion=17
  *   - build.gradle.kts references org.jetbrains.intellij.platform
  *   - settings.gradle.kts declares the project name
@@ -20,11 +20,11 @@ class GradleSmokeTest {
     private val projectRoot: File = File(System.getProperty("user.dir"))
 
     @Test
-    fun `gradle properties contains pluginSinceBuild 241`() {
+    fun `gradle properties contains pluginSinceBuild 261`() {
         val props = loadGradleProperties()
         val sinceBuild = props.getProperty("pluginSinceBuild")
         assertNotNull(sinceBuild, "gradle.properties must contain pluginSinceBuild")
-        assertTrue(sinceBuild == "241", "pluginSinceBuild must be 241, got: $sinceBuild")
+        assertTrue(sinceBuild == "261", "pluginSinceBuild must be 261, got: $sinceBuild")
     }
 
     @Test
