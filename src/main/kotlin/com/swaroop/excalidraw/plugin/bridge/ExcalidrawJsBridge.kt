@@ -145,6 +145,20 @@ class ExcalidrawJsBridge private constructor(
     }
 
     /**
+     * Injects a JS call to `window.__excalidrawAddLibrary__` with a JSON array of
+     * Excalidraw library items (parsed/normalised by the Kotlin side from a fetched
+     * `.excalidrawlib`). The JS side merges them via excalidrawAPI.updateLibrary.
+     *
+     * A03: [libraryItemsJson] is passed only as a quoted JS string literal (via Gson) —
+     * no eval, no concatenation. After [dispose] this is a no-op.
+     */
+    fun addLibrary(libraryItemsJson: String) {
+        if (disposed) return
+        val jsStringLiteral = GSON.toJson(libraryItemsJson)
+        injector("window.$ADD_LIBRARY_FN($jsStringLiteral);")
+    }
+
+    /**
      * Registers a one-shot callback for the next JS→Kotlin export result.
      *
      * The [callback] is stored in the [exportResultCallback] slot.  When the
@@ -550,6 +564,12 @@ class ExcalidrawJsBridge private constructor(
          * independently testable via [ExcalidrawJsBridgePngTest.EXPORT_PNG_FN constant].
          */
         const val EXPORT_PNG_FN: String = "__excalidrawExportPng__"
+
+        /**
+         * Stable JS window-function name called by [addLibrary] to merge fetched
+         * library items into the editor's library via excalidrawAPI.updateLibrary.
+         */
+        const val ADD_LIBRARY_FN: String = "__excalidrawAddLibrary__"
 
         /**
          * Shared Gson instance — thread-safe for serialisation (Gson is immutable

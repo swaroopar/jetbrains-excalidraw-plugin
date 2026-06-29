@@ -83,6 +83,33 @@ function App() {
     };
 
     /**
+     * window.__excalidrawAddLibrary__(itemsJson) — Kotlin->JS channel that merges
+     * library items into the editor's library. itemsJson is a JSON array of
+     * Excalidraw library items (parsed/normalised by the Kotlin side from the
+     * .excalidrawlib the user picked in the in-IDE library browser).
+     *
+     * Deliberately uses only the existing api.updateLibrary (no extra package
+     * imports and no IndexedDB) — the opaque excalidraw:// origin disables
+     * IndexedDB, so the library-persistence code paths must be avoided. This is an
+     * inert function until invoked, so it cannot affect initial render.
+     */
+    window.__excalidrawAddLibrary__ = function (itemsJson) {
+      var api = excalidrawAPIRef.current;
+      if (!api || typeof itemsJson !== "string") {
+        return;
+      }
+      try {
+        var items = JSON.parse(itemsJson);
+        if (!Array.isArray(items) || items.length === 0) {
+          return;
+        }
+        api.updateLibrary({ libraryItems: items, merge: true, openLibraryMenu: true });
+      } catch (e) {
+        /* malformed items — ignore */
+      }
+    };
+
+    /**
      * window.__excalidrawExport__(format, scale) — Kotlin→JS export channel.
      *
      * Parameters:
