@@ -220,10 +220,17 @@ function App() {
         }
         var blob = new Blob([bytes], { type: "image/png" });
         loadFromBlob(blob, null, null).then(function (data) {
+          // Register embedded raster images (image elements reference these by
+          // fileId). updateScene does NOT load the files store — addFiles does —
+          // so without this, embedded images render as a broken-image placeholder.
+          var files = data.files || {};
+          var fileArray = Object.keys(files).map(function (k) { return files[k]; });
+          if (fileArray.length > 0 && typeof api.addFiles === "function") {
+            try { api.addFiles(fileArray); } catch (e) { /* ignore */ }
+          }
           api.updateScene({
             elements: data.elements || [],
             appState: data.appState || {},
-            files: data.files || {},
           });
           sendToKotlin(JSON.stringify({
             type: "pngExtracted",
