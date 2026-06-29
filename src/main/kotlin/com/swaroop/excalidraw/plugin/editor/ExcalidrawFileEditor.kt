@@ -2,6 +2,8 @@ package com.swaroop.excalidraw.plugin.editor
 
 import com.google.gson.Gson
 import com.google.gson.JsonArray
+import com.google.gson.JsonObject
+import com.google.gson.JsonParser
 import com.intellij.notification.Notification
 import com.intellij.notification.NotificationType
 import com.intellij.notification.Notifications
@@ -18,7 +20,9 @@ import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.util.Alarm
 import com.swaroop.excalidraw.plugin.bridge.ExcalidrawJsBridge
 import com.swaroop.excalidraw.plugin.bridge.SceneChangeMessage
+import com.intellij.util.io.HttpRequests
 import com.swaroop.excalidraw.plugin.jcef.ExcalidrawJcefHost
+import com.swaroop.excalidraw.plugin.jcef.LibraryBrowserDialog
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawParseException
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawPersistenceService
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawSerializer
@@ -164,6 +168,45 @@ class ExcalidrawFileEditor private constructor(
         private fun isExcalidrawPng(name: String): Boolean = name.endsWith(".excalidraw.png")
 
         /**
+         * Normalises the contents of a `.excalidrawlib` file into a JSON array of
+         * Excalidraw library items (the shape excalidrawAPI.updateLibrary expects),
+         * or null if it can't be parsed.
+         *
+         * Handles both formats:
+         *  - v2: `{ "type":"excalidrawlib", "libraryItems":[ {id,status,elements,created}, … ] }`
+         *  - v1: `{ "type":"excalidrawlib", "library":[ [elements], … ] }` (each entry wrapped).
+         *
+         * Pure + unit-testable; no IDE/JCEF dependency.
+         */
+        internal fun parseLibraryItems(fileText: String): String? {
+            val root = try {
+                JsonParser.parseString(fileText)?.takeIf { it.isJsonObject }?.asJsonObject
+            } catch (_: Exception) {
+                null
+            } ?: return null
+
+            if (root.has("libraryItems") && root.get("libraryItems").isJsonArray) {
+                val arr = root.getAsJsonArray("libraryItems")
+                if (arr.size() > 0) return arr.toString()
+            }
+            if (root.has("library") && root.get("library").isJsonArray) {
+                val lib = root.getAsJsonArray("library")
+                val items = JsonArray()
+                for ((i, entry) in lib.withIndex()) {
+                    if (!entry.isJsonArray) continue
+                    val item = JsonObject()
+                    item.addProperty("id", "imported-$i")
+                    item.addProperty("status", "unpublished")
+                    item.addProperty("created", 1L)
+                    item.add("elements", entry)
+                    items.add(item)
+                }
+                if (items.size() > 0) return items.toString()
+            }
+            return null
+        }
+
+        /**
          * Production constructor — creates real [ExcalidrawJcefHost] and
          * [ExcalidrawJsBridge] instances backed by the live JCEF runtime.
          *
@@ -228,6 +271,9 @@ class ExcalidrawFileEditor private constructor(
                 // (listener-leak-free, AC-E4-02, task-05-007).
                 Disposer.register(editor, themeController)
                 editor.wireLoadEndCallback()
+                // "Browse libraries" → open the in-IDE library browser and round-trip the
+                // chosen library back into this editor.
+                host.onBrowseLibraries = { url -> editor.openLibraryBrowser(url) }
             }
         }
 
@@ -533,6 +579,38 @@ class ExcalidrawFileEditor private constructor(
                 work()
             }
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Library browsing (round-trip: site -> .excalidrawlib -> editor library)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Opens the in-IDE [LibraryBrowserDialog] for [libraryUrl]. When the user adds a
+     * library, the dialog hands back the `.excalidrawlib` URL; we fetch + normalise it
+     * off the EDT and inject the items via [ExcalidrawJsBridge.addLibrary], which merges
+     * them with excalidrawAPI.updateLibrary. Wired from the production factory only.
+     */
+    private fun openLibraryBrowser(libraryUrl: String) {
+        val proj = project ?: return
+        LibraryBrowserDialog(proj, libraryUrl) { libUrl ->
+            ApplicationManager.getApplication().executeOnPooledThread {
+                val itemsJson: String? = try {
+                    val fileText = HttpRequests.request(libUrl)
+                        .accept("application/json, application/octet-stream, */*")
+                        .readString()
+                    parseLibraryItems(fileText)
+                } catch (e: Exception) {
+                    LOG.warn("ExcalidrawFileEditor: failed to load library from '$libUrl'", e)
+                    null
+                }
+                if (itemsJson != null) {
+                    ApplicationManager.getApplication().invokeLater {
+                        if (!isDisposed) bridge.addLibrary(itemsJson)
+                    }
+                }
+            }
+        }.show()
     }
 
     // -------------------------------------------------------------------------

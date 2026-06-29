@@ -1,5 +1,6 @@
 package com.swaroop.excalidraw.plugin.jcef
 
+import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.logger
@@ -9,6 +10,7 @@ import com.intellij.ui.jcef.JBCefBrowser
 import org.cef.browser.CefBrowser
 import org.cef.browser.CefFrame
 import org.cef.callback.CefSchemeRegistrar
+import org.cef.handler.CefLifeSpanHandlerAdapter
 import org.cef.handler.CefLoadHandler
 import org.cef.handler.CefLoadHandlerAdapter
 import org.cef.network.CefRequest
@@ -87,6 +89,7 @@ class ExcalidrawJcefHost private constructor(
                 .build()
             val host = ExcalidrawJcefHost(browser)
             host.registerLoadHandler()
+            host.registerLifeSpanHandler()
             // Diagnostics: launch with -Dexcalidraw.devtools=true (Help > Edit Custom VM
             // Options) to open the JCEF DevTools window and inspect the browser console /
             // network for a blank-canvas issue. Off by default.
@@ -131,6 +134,61 @@ class ExcalidrawJcefHost private constructor(
      * [registerLoadHandler]). Bounded by [MAX_SCHEME_RELOADS].
      */
     private val schemeReloadAttempts = AtomicInteger(0)
+
+    /**
+     * Optional hook invoked (on the EDT) when the user opens Excalidraw's
+     * "Browse libraries" link, with the full libraries.excalidraw.com URL.
+     * [com.swaroop.excalidraw.plugin.editor.ExcalidrawFileEditor] sets this to open the
+     * in-IDE library browser so the chosen library round-trips back into the editor.
+     * When null, the URL falls back to the external system browser.
+     */
+    var onBrowseLibraries: ((String) -> Unit)? = null
+
+    /**
+     * Routes pop-up windows (and other new-window navigations) to the user's default
+     * external browser instead of silently dropping them.
+     *
+     * Excalidraw's "Browse libraries" button — and element hyperlinks — are anchors with
+     * a `target` (e.g. `_excalidraw_libraries`), which JCEF treats as pop-up requests. With
+     * no [org.cef.handler.CefLifeSpanHandler] the pop-up is never created, so clicking does
+     * nothing. We cancel the embedded pop-up and open the http(s) URL via [BrowserUtil] so
+     * libraries.excalidraw.com (and any external link) opens in the system browser.
+     *
+     * Non-http(s) targets are ignored (NFR1: the excalidraw:// app itself never navigates
+     * out, and we must not hand arbitrary schemes to the OS).
+     */
+    private fun registerLifeSpanHandler() {
+        browser?.jbCefClient?.addLifeSpanHandler(
+            object : CefLifeSpanHandlerAdapter() {
+                override fun onBeforePopup(
+                    cefBrowser: CefBrowser?,
+                    frame: CefFrame?,
+                    targetUrl: String?,
+                    targetFrameName: String?
+                ): Boolean {
+                    val handler = onBrowseLibraries
+                    if (targetUrl != null && handler != null && targetUrl.contains("libraries.excalidraw.com")) {
+                        // "Browse libraries" → in-IDE library browser (round-trips the
+                        // chosen library back into the editor). onBeforePopup runs on a CEF
+                        // thread, not the EDT — opening a dialog / creating a JBCefBrowser
+                        // off the EDT silently fails AND corrupts shared CEF state (all later
+                        // browsers go blank), so hop to the EDT first.
+                        LOG.info("Excalidraw: opening library browser for: $targetUrl")
+                        ApplicationManager.getApplication().invokeLater { handler(targetUrl) }
+                    } else if (targetUrl != null &&
+                        (targetUrl.startsWith("http://") || targetUrl.startsWith("https://"))
+                    ) {
+                        LOG.info("Excalidraw: opening external link in system browser: $targetUrl")
+                        BrowserUtil.browse(targetUrl)
+                    }
+                    // Always cancel the embedded pop-up — we either handled it (library
+                    // browser / external browser) or it targets a scheme we don't allow.
+                    return true
+                }
+            },
+            browser.cefBrowser
+        )
+    }
 
     /**
      * Registers a [CefLoadHandlerAdapter] on the underlying browser that will call
