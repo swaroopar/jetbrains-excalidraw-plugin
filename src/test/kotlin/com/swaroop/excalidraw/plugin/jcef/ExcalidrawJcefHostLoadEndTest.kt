@@ -107,6 +107,26 @@ class ExcalidrawJcefHostLoadEndTest {
         assertEquals(1, callCount, "Listener must fire at most once, even if onLoadEnd fires multiple times")
     }
 
+    @Test
+    fun `armForReload re-arms the listener so the next loadEnd re-fires`() {
+        // Models the scheme-not-ready retry: the failed load's error page fired loadEnd
+        // (once), then we re-arm and reload — the successful reload's loadEnd must push
+        // the scene again, otherwise the first restored editor renders empty.
+        val host = ExcalidrawJcefHost.createForTest()
+        var callCount = 0
+        host.addLoadEndListener { callCount++ }
+
+        simulateLoadEnd(host)          // error page
+        assertEquals(1, callCount)
+        simulateLoadEnd(host)          // still no-op (once-only)
+        assertEquals(1, callCount)
+
+        host.armForReload()            // re-arm before the retry reload
+        simulateLoadEnd(host)          // successful reload
+
+        assertEquals(2, callCount, "Listener must fire again after armForReload re-arms it")
+    }
+
     // ---------------------------------------------------------------------------
     // Scenario 3 — No callback after dispose()
     // ---------------------------------------------------------------------------

@@ -224,7 +224,17 @@ class ExcalidrawJcefHost private constructor(
                         // Retry on the EDT after a short delay; the `disposed` guard makes a
                         // late-firing retry a no-op if the editor is closed meanwhile.
                         EdtScheduledExecutorService.getInstance().schedule(
-                            { if (!disposed) browser.cefBrowser.loadURL(START_URL) },
+                            {
+                                if (!disposed) {
+                                    // The failed (ERR_UNKNOWN_URL_SCHEME) load already fired
+                                    // onLoadEnd for its error page, tripping the once-only
+                                    // [fired] guard. Reset it so this reload's onLoadEnd
+                                    // re-fires the scene-push — otherwise the first restored
+                                    // editor on IDE restart renders empty.
+                                    armForReload()
+                                    browser.cefBrowser.loadURL(START_URL)
+                                }
+                            },
                             SCHEME_RELOAD_DELAY_MS.toLong(),
                             TimeUnit.MILLISECONDS
                         )
@@ -285,6 +295,18 @@ class ExcalidrawJcefHost private constructor(
      *
      * A05: guarded by [disposed] — no callbacks after disposal.
      */
+    /**
+     * Re-arms the once-only [fireLoadEnd] so the next main-frame onLoadEnd fires the
+     * registered listeners again. Used before a scheme-not-ready retry reload (the failed
+     * load's error page already tripped [fired]); the registered listeners are idempotent
+     * (re-install the return channel, re-request the scene), so re-running them on the
+     * successful reload is what restores the scene.
+     */
+    internal fun armForReload() {
+        if (disposed) return
+        fired = false
+    }
+
     internal fun fireLoadEnd() {
         if (disposed || fired) return
         fired = true
