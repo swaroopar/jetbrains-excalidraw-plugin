@@ -23,6 +23,7 @@ import com.swaroop.excalidraw.plugin.bridge.SceneChangeMessage
 import com.intellij.util.io.HttpRequests
 import com.swaroop.excalidraw.plugin.jcef.ExcalidrawJcefHost
 import com.swaroop.excalidraw.plugin.jcef.LibraryBrowserDialog
+import com.swaroop.excalidraw.plugin.persistence.ExcalidrawLibraryService
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawParseException
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawPersistenceService
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawSerializer
@@ -274,6 +275,11 @@ class ExcalidrawFileEditor private constructor(
                 // "Browse libraries" → open the in-IDE library browser and round-trip the
                 // chosen library back into this editor.
                 host.onBrowseLibraries = { url -> editor.openLibraryBrowser(url) }
+                // Persist the library on every change (IndexedDB is unavailable on the
+                // opaque origin), so added libraries survive IDE restarts.
+                bridge.registerLibraryChangeCallback { itemsJson ->
+                    ExcalidrawLibraryService.getInstance().libraryItemsJson = itemsJson
+                }
             }
         }
 
@@ -546,6 +552,7 @@ class ExcalidrawFileEditor private constructor(
                     // AC-E4-01 timing: push initial theme after the JS call so that
                     // __excalidrawSetTheme__ is guaranteed to be defined at this point.
                     themeController?.pushCurrentTheme()
+                    restorePersistedLibrary()
                 } else {
                     // JSON path (plain .excalidraw files). readSceneOrNew opens an empty
                     // or newly-created file as a blank canvas instead of erroring.
@@ -560,6 +567,7 @@ class ExcalidrawFileEditor private constructor(
                         // window.__excalidrawSetTheme__ (registered in index.jsx after
                         // render) is guaranteed to exist before the call (task-05-007).
                         themeController?.pushCurrentTheme()
+                        restorePersistedLibrary()
                     } catch (ex: ExcalidrawParseException) {
                         // AD-03: invoke the notifier hook, do NOT write VirtualFile.
                         // A09: only the human-readable message is surfaced — no stack trace in UI.
@@ -591,6 +599,23 @@ class ExcalidrawFileEditor private constructor(
      * off the EDT and inject the items via [ExcalidrawJsBridge.addLibrary], which merges
      * them with excalidrawAPI.updateLibrary. Wired from the production factory only.
      */
+    /**
+     * Restores the persisted library into the freshly-loaded editor (called once per
+     * load, after the scene + theme are pushed). No-op when nothing has been saved.
+     */
+    private fun restorePersistedLibrary() {
+        // No Application (unit tests) → nothing to restore.
+        if (ApplicationManager.getApplication() == null) return
+        val saved = try {
+            ExcalidrawLibraryService.getInstance().libraryItemsJson
+        } catch (_: Throwable) {
+            // Service container not available (e.g. lightweight test fixtures) — skip.
+            null
+        } ?: return
+        if (saved == "[]") return
+        bridge.loadLibrary(saved)
+    }
+
     private fun openLibraryBrowser(libraryUrl: String) {
         val proj = project ?: return
         LibraryBrowserDialog(proj, libraryUrl) { libUrl ->

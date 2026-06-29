@@ -94,6 +94,14 @@ class ExcalidrawJsBridge private constructor(
     private var pngExportedCallback: ((BridgeMessage.PngExported) -> Unit)? = null
 
     /**
+     * Persistent (not one-shot) callback for library changes (JS→Kotlin). Set by
+     * [registerLibraryChangeCallback]; invoked on every [BridgeMessage.LibraryChange]
+     * with the full library items JSON so the host can persist it.
+     */
+    @Volatile
+    internal var libraryChangeCallback: ((String) -> Unit)? = null
+
+    /**
      * Serialises [scene] via [BridgeMessage.LoadScene.toJson] and injects a JS
      * call to `window.__excalidrawLoadScene__` with the resulting JSON as a
      * string literal argument.
@@ -156,6 +164,28 @@ class ExcalidrawJsBridge private constructor(
         if (disposed) return
         val jsStringLiteral = GSON.toJson(libraryItemsJson)
         injector("window.$ADD_LIBRARY_FN($jsStringLiteral);")
+    }
+
+    /**
+     * Injects a JS call to `window.__excalidrawLoadLibrary__` to REPLACE the editor's
+     * library with [libraryItemsJson] (a JSON array of library items). Used at load time
+     * to restore the persisted library. A03: passed only as a quoted JS string literal.
+     * After [dispose] this is a no-op.
+     */
+    fun loadLibrary(libraryItemsJson: String) {
+        if (disposed) return
+        val jsStringLiteral = GSON.toJson(libraryItemsJson)
+        injector("window.$LOAD_LIBRARY_FN($jsStringLiteral);")
+    }
+
+    /**
+     * Registers a persistent callback invoked with the full library items JSON whenever
+     * the editor's library changes (add/remove/reorder). Used by the editor to persist
+     * the library. After [dispose] this is a no-op.
+     */
+    fun registerLibraryChangeCallback(cb: (String) -> Unit) {
+        if (disposed) return
+        libraryChangeCallback = cb
     }
 
     /**
@@ -572,6 +602,12 @@ class ExcalidrawJsBridge private constructor(
         const val ADD_LIBRARY_FN: String = "__excalidrawAddLibrary__"
 
         /**
+         * Stable JS window-function name called by [loadLibrary] to replace the editor's
+         * library with the persisted items at load time.
+         */
+        const val LOAD_LIBRARY_FN: String = "__excalidrawLoadLibrary__"
+
+        /**
          * Shared Gson instance — thread-safe for serialisation (Gson is immutable
          * after construction).  Used to encode the JSON payload into a JS string
          * literal: [Gson.toJson] with a [String] argument produces a properly
@@ -662,6 +698,15 @@ class ExcalidrawJsBridge private constructor(
                             bridge.pngExportedCallback = null
                             ApplicationManager.getApplication()?.invokeLater {
                                 cb(parsed)
+                            }
+                        }
+                    }
+                    is BridgeMessage.LibraryChange -> {
+                        // Persistent (not one-shot): fired on every library change.
+                        val cb = bridge.libraryChangeCallback
+                        if (cb != null) {
+                            ApplicationManager.getApplication()?.invokeLater {
+                                cb(parsed.libraryItemsJson)
                             }
                         }
                     }
