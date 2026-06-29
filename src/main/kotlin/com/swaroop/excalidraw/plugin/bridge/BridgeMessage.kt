@@ -72,6 +72,14 @@ sealed class BridgeMessage {
      */
     data class PngExported(val base64Png: String?, val error: String?) : BridgeMessage()
 
+    /**
+     * JS→Kotlin: the editor's library changed (item added, removed or reordered).
+     * [libraryItemsJson] is the full current library items array serialised as JSON —
+     * persisted by the Kotlin side so libraries survive IDE restarts (the opaque
+     * excalidraw:// origin disables Excalidraw's own IndexedDB persistence).
+     */
+    data class LibraryChange(val libraryItemsJson: String) : BridgeMessage()
+
     companion object {
         private val gson: Gson = Gson()
 
@@ -110,6 +118,11 @@ sealed class BridgeMessage {
                         base64Png = obj.get("base64Png")?.takeIf { !it.isJsonNull }?.asString,
                         error     = obj.get("error")?.takeIf { !it.isJsonNull }?.asString
                     )
+                    "libraryChange" -> {
+                        val items = obj.get("libraryItems")
+                        if (items == null || !items.isJsonArray) return null
+                        LibraryChange(libraryItemsJson = items.asJsonArray.toString())
+                    }
                     else -> null
                 }
             } catch (_: JsonSyntaxException) {

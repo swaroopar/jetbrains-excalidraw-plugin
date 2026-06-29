@@ -110,6 +110,27 @@ function App() {
     };
 
     /**
+     * window.__excalidrawLoadLibrary__(itemsJson) — Kotlin->JS channel that REPLACES the
+     * library with the persisted items at load time (merge:false). Same in-memory path as
+     * __excalidrawAddLibrary__ (no IndexedDB).
+     */
+    window.__excalidrawLoadLibrary__ = function (itemsJson) {
+      var api = excalidrawAPIRef.current;
+      if (!api || typeof itemsJson !== "string") {
+        return;
+      }
+      try {
+        var items = JSON.parse(itemsJson);
+        if (!Array.isArray(items) || items.length === 0) {
+          return;
+        }
+        api.updateLibrary({ libraryItems: items, merge: false });
+      } catch (e) {
+        /* malformed items — ignore */
+      }
+    };
+
+    /**
      * window.__excalidrawExport__(format, scale) — Kotlin→JS export channel.
      *
      * Parameters:
@@ -291,6 +312,12 @@ function App() {
     onChange: function (elements, appState) {
       var payload = JSON.stringify({ type: "sceneChange", elements: elements, appState: appState });
       sendToKotlin(payload);
+    },
+    // Persist the library on every change (add/remove/reorder) so it survives IDE
+    // restarts. Kotlin saves the full items and restores them on the next open via
+    // __excalidrawLoadLibrary__ (the opaque origin disables Excalidraw's own IndexedDB).
+    onLibraryChange: function (libraryItems) {
+      sendToKotlin(JSON.stringify({ type: "libraryChange", libraryItems: libraryItems }));
     },
   });
 }

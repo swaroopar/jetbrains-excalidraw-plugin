@@ -190,4 +190,22 @@ class BridgeMessageTest {
         assertTrue(msg.error != null, "error must not be null")
         assertTrue(msg.base64Png == null, "base64Png must be null when error is present")
     }
+
+    // --- library persistence: LibraryChange ---
+
+    @Test
+    fun `fromJson libraryChange returns LibraryChange with the items array as json`() {
+        val json = """{"type":"libraryChange","libraryItems":[{"id":"a","elements":[]}]}"""
+        val result = BridgeMessage.fromJson(json)
+        assertTrue(result is BridgeMessage.LibraryChange, "Expected LibraryChange but got $result")
+        val msg = result as BridgeMessage.LibraryChange
+        assertTrue(msg.libraryItemsJson.startsWith("["), "items json must be the array: ${msg.libraryItemsJson}")
+        assertTrue(msg.libraryItemsJson.contains("\"a\""), "items json must contain the item")
+    }
+
+    @Test
+    fun `fromJson libraryChange without items array returns null`() {
+        assertTrue(BridgeMessage.fromJson("""{"type":"libraryChange"}""") == null)
+        assertTrue(BridgeMessage.fromJson("""{"type":"libraryChange","libraryItems":"x"}""") == null)
+    }
 }
