@@ -7,7 +7,6 @@ import com.swaroop.excalidraw.plugin.jcef.ExcalidrawJcefHost
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawPersistenceService
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
-import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -19,8 +18,8 @@ import org.junit.jupiter.api.Test
  *    currentSceneJson set on success, no notifications on success.
  *  - AC-E6-02: Auto-saving a `.excalidraw.png` file — async PNG export via bridge,
  *    decoded bytes begin with PNG magic byte 0x89, written exactly once.
- *  - AC-E6-03: PNG open with extraction error — notifier called, currentSceneJson
- *    remains null, no file-write occurs.
+ *  - AC-E6-03: PNG open with no embedded scene — opens as a blank, editable drawing;
+ *    no file-write on open; the user's first edit saves (creating the round-trip).
  *
  * Test harness: plain JUnit 5 + createForTest factories (no JCEF runtime, no MockK,
  * no Mockito). Uses FakePersistenceService to capture writePngScene calls in-process.
@@ -172,10 +171,14 @@ class PngEditorIntegrationTest {
             debounceExecutor = {}
         )
         editorHolder = editor
-        // Establish the unedited baseline (initial onChange on scene load); a
-        // non-empty scene so the empty-elements edit below counts as a real change.
-        bridge.simulateSceneChange(
-            """{"type":"sceneChange","elements":[{"type":"__baseline__"}],"appState":{}}"""
+        // Arm the PNG editor through the realistic open path: loadEnd, then a successful
+        // extraction whose scene has one __baseline__ element. This sets pngSceneExtracted
+        // and seeds the baseline, so the empty-elements edit below counts as a real change.
+        stubHost.fireLoadEnd()
+        bridge.simulatePngExtracted(
+            """{"type":"pngExtracted","sceneJson":${com.google.gson.Gson().toJson(
+                """{"type":"excalidraw","elements":[{"type":"__baseline__"}],"appState":{}}"""
+            )}}"""
         )
 
         // Trigger a scene change so currentSceneJson is set
@@ -221,19 +224,24 @@ class PngEditorIntegrationTest {
      * AC-E6-03: Opening a `.excalidraw.png` without an embedded Excalidraw scene
      * must show a non-destructive error and leave the file untouched.
      *
-     * After [ExcalidrawJsBridge.simulatePngExtracted] with error != null:
-     *  - [capturedNotifications] is not empty (the error notification was raised).
-     *  - [ExcalidrawFileEditor.currentSceneJson] is null (not set on error).
-     *  - [FakePersistenceService.writtenBytes] is null (writePngScene was not called).
+     * After [ExcalidrawJsBridge.simulatePngExtracted] with error != null (no embedded scene):
+     *  - The file is opened as a blank, editable drawing (currentSceneJson is armed, non-null).
+     *  - Opening is non-destructive: writePngScene is NOT called just by opening.
+     *  - A subsequent real edit IS persisted (writePngScene called once), turning the file
+     *    into a proper `.excalidraw.png` with an embedded scene.
      */
     @Test
-    fun `AC-E6-03 PNG extraction error triggers notifier, leaves currentSceneJson null and no write`() {
+    fun `AC-E6-03 PNG with no embedded scene opens blank, no write on open, edit then saves`() {
         val capturedJs = mutableListOf<String>()
         val capturedNotifications = mutableListOf<String>()
         val fakePersistence = FakePersistenceService()
+        var editorHolder: ExcalidrawFileEditor? = null
 
         val bridge = ExcalidrawJsBridge.createForTest(
-            injector = { js -> capturedJs.add(js) }
+            injector = { js -> capturedJs.add(js) },
+            sceneChangeHandler = { scene: SceneChangeMessage ->
+                editorHolder?.onSceneChanged(scene)
+            }
         )
         val file = StubVirtualFile("valid.excalidraw.png", stubPngBytes)
         val stubHost = ExcalidrawJcefHost.createForTest()
@@ -243,8 +251,10 @@ class PngEditorIntegrationTest {
             jcefHost = stubHost,
             bridge = bridge,
             persistenceService = fakePersistence,
-            notifier = { msg -> capturedNotifications.add(msg) }
+            notifier = { msg -> capturedNotifications.add(msg) },
+            debounceExecutor = {}
         )
+        editorHolder = editor
 
         // Simulate the JCEF loadEnd event
         stubHost.fireLoadEnd()
@@ -254,22 +264,30 @@ class PngEditorIntegrationTest {
             """{"type":"pngExtracted","error":"No Excalidraw scene found in PNG"}"""
         )
 
-        assertTrue(
-            capturedNotifications.isNotEmpty(),
-            "AC-E6-03: notifier must be called when PNG extraction fails"
-        )
-        assertNull(
+        // Opened as a blank, editable drawing — armed but nothing written yet.
+        assertNotNull(
             editor.currentSceneJson,
-            "AC-E6-03: currentSceneJson must remain null when PNG extraction fails"
-        )
-        assertNull(
-            fakePersistence.writtenBytes,
-            "AC-E6-03: writePngScene must NOT be called when extraction fails (no-write guarantee)"
+            "AC-E6-03: a scene-less PNG must open as an armed blank drawing (currentSceneJson set)"
         )
         assertEquals(
             0,
             fakePersistence.writePngSceneCallCount,
-            "AC-E6-03: writePngScene call count must be 0 on extraction error"
+            "AC-E6-03: opening a scene-less PNG must not write the file"
+        )
+
+        // The user draws something — this real edit must be persisted.
+        bridge.simulateSceneChange(
+            """{"type":"sceneChange","elements":[{"type":"rectangle","id":"drawn"}],"appState":{}}"""
+        )
+        editor.flushDebounce()
+        bridge.simulatePngExported(
+            """{"type":"pngExported","base64Png":"$validBase64Png"}"""
+        )
+
+        assertEquals(
+            1,
+            fakePersistence.writePngSceneCallCount,
+            "AC-E6-03: the user's first edit on a scene-less PNG must be saved (round-trip created)"
         )
 
         editor.dispose()
