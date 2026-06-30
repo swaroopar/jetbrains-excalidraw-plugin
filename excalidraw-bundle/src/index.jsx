@@ -243,6 +243,12 @@ function App() {
             }),
           }));
         }).catch(function (e) {
+          // No embedded Excalidraw scene in this PNG (e.g. a plain raster), or it could
+          // not be decoded as one. Open a blank, editable canvas so the user can draw and
+          // save — the first save creates a proper .excalidraw.png with an embedded scene.
+          // Clearing to empty makes the canvas state match the empty baseline the Kotlin
+          // side seeds, so merely opening the file never rewrites it; only a real edit does.
+          try { api.updateScene({ elements: [], appState: {} }); } catch (_e) { /* ignore */ }
           sendToKotlin(JSON.stringify({
             type: "pngExtracted",
             error: (e && e.message) ? e.message : "unknown error",

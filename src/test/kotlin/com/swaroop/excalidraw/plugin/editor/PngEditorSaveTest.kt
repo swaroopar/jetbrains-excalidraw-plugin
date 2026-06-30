@@ -392,23 +392,24 @@ class PngEditorSaveTest {
     }
 
     // -------------------------------------------------------------------------
-    // Test 6 (regression): PNG without an embedded scene is never overwritten
+    // Test 6 (regression): opening a scene-less PNG is non-destructive
     // -------------------------------------------------------------------------
 
     /**
-     * Regression — a `.excalidraw.png` whose embedded scene could NOT be extracted
-     * (e.g. a plain raster PNG exported by another tool) must never be overwritten by
-     * autosave, even when the canvas keeps firing scene-change events with stale or
-     * empty content.
+     * Regression — opening a `.excalidraw.png` with no embedded scene (a plain raster)
+     * must not rewrite the file on open. The file opens as a blank, editable drawing
+     * (the JS side clears the canvas to empty), so the only scene-change event that
+     * arrives is the empty-canvas echo, which matches the empty baseline and must not
+     * trigger an autosave.
      *
-     * Before this fix, the first canvas onChange seeded an empty baseline and a later
-     * (stale) onChange looked like a user edit, so autosave re-rasterised the wrong
-     * scene over the user's image — silently destroying it and making the file "render
-     * old/wrong elements". With [ExcalidrawFileEditor.pngSceneExtracted] gating the
-     * write, an unextracted PNG is left byte-for-byte untouched.
+     * Before this work, the first onChange seeded an empty baseline and a later stale
+     * onChange looked like a user edit, so autosave re-rasterised the wrong scene over
+     * the user's image — destroying it and making the file "render old/wrong elements".
+     * Now a write happens only when the user actually draws (covered by the integration
+     * test); merely opening leaves the file byte-for-byte untouched.
      */
     @Test
-    fun `png with failed extraction is never written despite scene change events`() {
+    fun `opening a scene-less png does not write the file`() {
         val fakePersistence = FakePersistenceService()
         var editorHolder: ExcalidrawFileEditor? = null
 
@@ -435,31 +436,27 @@ class PngEditorSaveTest {
         )
         editorHolder = editor
 
-        // Open path: loadEnd fires, but extraction FAILS — the PNG has no embedded scene.
+        // Open path: loadEnd fires, extraction FAILS (no embedded scene) → blank canvas.
         stubHost.fireLoadEnd()
         bridge.simulatePngExtracted(
             """{"type":"pngExtracted","error":"No Excalidraw scene found"}"""
         )
 
-        // The canvas now emits stale/empty scene-change events (its own residual state).
-        bridge.simulateSceneChange(
-            """{"type":"sceneChange","elements":[{"type":"rectangle","id":"stale"}],"appState":{}}"""
-        )
+        // The JS side cleared the canvas to empty; its onChange echo carries no elements.
         bridge.simulateSceneChange(
             """{"type":"sceneChange","elements":[],"appState":{}}"""
         )
 
-        // Even if a debounce had somehow been scheduled, firing it must not write.
         editor.flushDebounce()
 
         assertEquals(
             0,
             fakePersistence.writePngSceneCallCount,
-            "A .excalidraw.png whose scene was not extracted must NEVER be overwritten by autosave"
+            "Merely opening a scene-less .excalidraw.png must not overwrite it"
         )
         assertFalse(
             editor.isModified(),
-            "An unextracted PNG must not be marked modified by stale canvas events"
+            "Opening a scene-less PNG (empty canvas) must not mark the editor modified"
         )
 
         editor.dispose()

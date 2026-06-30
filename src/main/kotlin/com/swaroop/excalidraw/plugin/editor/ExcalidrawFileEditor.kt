@@ -156,6 +156,14 @@ class ExcalidrawFileEditor private constructor(
         const val AUTOSAVE_DEBOUNCE_MS: Long = 500L
 
         /**
+         * Canonical empty Excalidraw scene used as [currentSceneJson] when a `.excalidraw.png`
+         * is opened with no embedded scene (it becomes a fresh, savable blank drawing). Mirrors
+         * the empty canvas the JS side renders in that case, so the seeded baseline matches.
+         */
+        private const val EMPTY_SCENE_JSON: String =
+            """{"type":"excalidraw","version":2,"elements":[],"appState":{},"files":{}}"""
+
+        /**
          * Returns true when [name] identifies a scene-embedded PNG file.
          *
          * The `.excalidraw.png` extension is a strict suffix check — `String.endsWith`
@@ -430,19 +438,22 @@ class ExcalidrawFileEditor private constructor(
      * Whether autosave is permitted to overwrite this `.excalidraw.png` file.
      *
      * `.excalidraw.png` files are persisted by re-rasterising the editor canvas and
-     * replacing the file's bytes. That is only safe when the canvas content was
-     * actually loaded from THIS file — i.e. its embedded Excalidraw scene was
-     * successfully extracted at open time. A PNG that carries no embedded scene (a
-     * plain raster exported elsewhere) fails extraction; the canvas then holds stale
-     * or empty state unrelated to the file, and persisting it would silently destroy
-     * the user's image (it re-rendered "old/wrong elements" onto the file on disk).
+     * replacing the file's bytes. Before this flag is set the canvas content has not
+     * been reconciled with the file (the extraction round-trip is still in flight, and
+     * an early `onChange` may carry stale/empty mount state), so a write then could
+     * silently destroy the user's image. While it is false, [onSceneChanged] drops
+     * events and [scheduleAutosave] refuses to write.
      *
-     * Set to true only in the PNG extraction-success branch of [wireLoadEndCallback];
-     * checked by [onSceneChanged] and [scheduleAutosave] before any PNG write. It is
-     * irrelevant for plain `.excalidraw` (JSON) files, which round-trip losslessly and
-     * are never gated by this flag.
+     * It is set to true once the open path has settled the canvas against the file, in
+     * BOTH branches of the PNG callback in [wireLoadEndCallback]:
+     *  - extraction success: baseline seeded from the extracted scene; edits round-trip;
+     *  - extraction failure (no embedded scene): the canvas is a blank drawing and the
+     *    baseline is empty, so opening writes nothing but the user's first edit saves
+     *    (creating a proper `.excalidraw.png` with an embedded scene).
      *
-     * Written exclusively on the EDT (AD-05). Volatile for cross-thread visibility.
+     * Irrelevant for plain `.excalidraw` (JSON) files, which round-trip losslessly and
+     * are never gated by this flag. Written exclusively on the EDT (AD-05); volatile for
+     * cross-thread visibility.
      */
     @Volatile
     private var pngSceneExtracted: Boolean = false
@@ -539,16 +550,21 @@ class ExcalidrawFileEditor private constructor(
                         // Callback arrives on the JCEF/bridge thread — route to EDT.
                         val deliver: () -> Unit = {
                             if (msg.error != null) {
-                                // AC-E6-03: non-destructive error — show notification,
-                                // do NOT write the file, leave currentSceneJson unchanged.
-                                // A09: only the human-readable error message is surfaced.
-                                LOG.warn(
-                                    "ExcalidrawFileEditor: PNG extraction error for " +
-                                        "'${file.path}': ${msg.error}"
+                                // The PNG carries no embedded Excalidraw scene (a plain raster),
+                                // or it could not be decoded as one. Open it as a blank, editable
+                                // canvas: arm autosave with an EMPTY baseline so the user can draw
+                                // and the first edit is persisted — that save writes a proper
+                                // .excalidraw.png with an embedded scene, after which every later
+                                // edit round-trips. The empty baseline (matched by the JS side,
+                                // which clears the canvas to empty here) guarantees that merely
+                                // opening the file never rewrites it — only a real edit does.
+                                LOG.info(
+                                    "ExcalidrawFileEditor: '${file.path}' has no embedded scene " +
+                                        "(${msg.error}) — opening as a new blank drawing"
                                 )
-                                notifier(
-                                    "Cannot extract Excalidraw scene from '${file.name}': ${msg.error}"
-                                )
+                                currentSceneJson = EMPTY_SCENE_JSON
+                                baselineElements = canonicalElements(JsonArray())
+                                pngSceneExtracted = true
                             } else {
                                 // AC-E6-01: scene extracted successfully. The canvas already
                                 // shows the scene (driven by __excalidrawLoadPng__ on the JS
