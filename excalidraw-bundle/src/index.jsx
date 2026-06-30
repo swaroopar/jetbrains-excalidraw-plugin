@@ -282,12 +282,19 @@ function App() {
       }
       try {
         var scene = JSON.parse(sceneJson);
+        // onChange reports deleted elements as { isDeleted: true } rather than removing
+        // them from the array, and Excalidraw's exporter renders every element it is
+        // handed (it does NOT skip deleted ones). So drop deleted elements here —
+        // otherwise "removed" elements keep showing up in the exported PNG.
+        var elements = (scene.elements || []).filter(function (el) { return !el.isDeleted; });
         exportToBlob({
-          elements: scene.elements || [],
-          appState: scene.appState || {},
+          elements: elements,
+          // exportEmbedScene is read from appState (NOT as a top-level option). The scene
+          // is embedded into the PNG only when the flag lives here; without it the saved
+          // .excalidraw.png carries no scene and re-opens as a blank canvas.
+          appState: Object.assign({}, scene.appState || {}, { exportEmbedScene: true }),
           files: scene.files || {},
           mimeType: "image/png",
-          exportEmbedScene: true,
         }).then(function (blob) {
           var reader = new FileReader();
           reader.onload = function (e) {
