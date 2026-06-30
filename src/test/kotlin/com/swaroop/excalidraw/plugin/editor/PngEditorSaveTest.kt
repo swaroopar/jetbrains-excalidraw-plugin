@@ -108,15 +108,29 @@ class PngEditorSaveTest {
         )
 
         editorHolder = editor
-        bridge.simulateSceneChange(BASELINE_PAYLOAD)
+        // Arm the PNG editor through the realistic open path: fire loadEnd, then deliver a
+        // successful extraction. This sets pngSceneExtracted=true and seeds the baseline from
+        // the extracted scene (one __baseline__ element), so the empty-elements edit the tests
+        // fire afterwards counts as a genuine change. Without this, autosave stays disabled —
+        // a .excalidraw.png whose scene was never extracted must never be overwritten.
+        stubHost.fireLoadEnd()
+        bridge.simulatePngExtracted(EXTRACTED_BASELINE_PAYLOAD)
         return Triple(editor, bridge, fakePersistence)
     }
 
     private companion object {
-        // Unedited-baseline scene (mirrors the initial onChange on scene load).
-        // Non-empty so the tests' empty-elements edit payload counts as a change.
+        // Unedited-baseline scene-change (mirrors the initial onChange on scene load) used
+        // by the plain-.excalidraw (JSON) regression test, which is not PNG-gated.
         const val BASELINE_PAYLOAD =
             """{"type":"sceneChange","elements":[{"type":"__baseline__"}],"appState":{}}"""
+
+        // A successful PNG extraction carrying one __baseline__ element. Delivering it arms
+        // autosave and seeds the change-detection baseline; the tests' empty-elements payload
+        // differs from it and therefore registers as a real edit.
+        val EXTRACTED_BASELINE_PAYLOAD: String =
+            """{"type":"pngExtracted","sceneJson":${com.google.gson.Gson().toJson(
+                """{"type":"excalidraw","elements":[{"type":"__baseline__"}],"appState":{}}"""
+            )}}"""
     }
 
     // -------------------------------------------------------------------------
@@ -157,7 +171,9 @@ class PngEditorSaveTest {
             debounceExecutor = {}
         )
         editorHolder = editor
-        bridgeForScene.simulateSceneChange(BASELINE_PAYLOAD)
+        // Arm via the realistic open path before exercising autosave.
+        stubHost.fireLoadEnd()
+        bridgeForScene.simulatePngExtracted(EXTRACTED_BASELINE_PAYLOAD)
 
         // Trigger a scene change so currentSceneJson is set
         val scenePayload =
@@ -292,7 +308,9 @@ class PngEditorSaveTest {
             debounceExecutor = {}
         )
         editorHolder = editor
-        bridge.simulateSceneChange(BASELINE_PAYLOAD)
+        // Arm via the realistic open path before exercising autosave.
+        stubHost.fireLoadEnd()
+        bridge.simulatePngExtracted(EXTRACTED_BASELINE_PAYLOAD)
 
         // Set currentSceneJson
         val scenePayload =
@@ -368,6 +386,80 @@ class PngEditorSaveTest {
             0,
             fakePersistence.writePngSceneCallCount,
             ".excalidraw file must NOT call writePngScene (regression)"
+        )
+
+        editor.dispose()
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 6 (regression): PNG without an embedded scene is never overwritten
+    // -------------------------------------------------------------------------
+
+    /**
+     * Regression — a `.excalidraw.png` whose embedded scene could NOT be extracted
+     * (e.g. a plain raster PNG exported by another tool) must never be overwritten by
+     * autosave, even when the canvas keeps firing scene-change events with stale or
+     * empty content.
+     *
+     * Before this fix, the first canvas onChange seeded an empty baseline and a later
+     * (stale) onChange looked like a user edit, so autosave re-rasterised the wrong
+     * scene over the user's image — silently destroying it and making the file "render
+     * old/wrong elements". With [ExcalidrawFileEditor.pngSceneExtracted] gating the
+     * write, an unextracted PNG is left byte-for-byte untouched.
+     */
+    @Test
+    fun `png with failed extraction is never written despite scene change events`() {
+        val fakePersistence = FakePersistenceService()
+        var editorHolder: ExcalidrawFileEditor? = null
+
+        val bridge = ExcalidrawJsBridge.createForTest(
+            injector = { _ -> },
+            sceneChangeHandler = { scene: SceneChangeMessage ->
+                editorHolder?.onSceneChanged(scene)
+            }
+        )
+
+        val file = StubVirtualFile(
+            "foreign.excalidraw.png",
+            ByteArray(8) { i -> if (i == 0) 0x89.toByte() else 0 }
+        )
+        val stubHost = ExcalidrawJcefHost.createForTest()
+
+        val editor = ExcalidrawFileEditor.createForTest(
+            file = file,
+            jcefHost = stubHost,
+            bridge = bridge,
+            persistenceService = fakePersistence,
+            notifier = { _ -> },
+            debounceExecutor = {}
+        )
+        editorHolder = editor
+
+        // Open path: loadEnd fires, but extraction FAILS — the PNG has no embedded scene.
+        stubHost.fireLoadEnd()
+        bridge.simulatePngExtracted(
+            """{"type":"pngExtracted","error":"No Excalidraw scene found"}"""
+        )
+
+        // The canvas now emits stale/empty scene-change events (its own residual state).
+        bridge.simulateSceneChange(
+            """{"type":"sceneChange","elements":[{"type":"rectangle","id":"stale"}],"appState":{}}"""
+        )
+        bridge.simulateSceneChange(
+            """{"type":"sceneChange","elements":[],"appState":{}}"""
+        )
+
+        // Even if a debounce had somehow been scheduled, firing it must not write.
+        editor.flushDebounce()
+
+        assertEquals(
+            0,
+            fakePersistence.writePngSceneCallCount,
+            "A .excalidraw.png whose scene was not extracted must NEVER be overwritten by autosave"
+        )
+        assertFalse(
+            editor.isModified(),
+            "An unextracted PNG must not be marked modified by stale canvas events"
         )
 
         editor.dispose()

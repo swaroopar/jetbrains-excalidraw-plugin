@@ -427,6 +427,27 @@ class ExcalidrawFileEditor private constructor(
     private var baselineElements: String? = null
 
     /**
+     * Whether autosave is permitted to overwrite this `.excalidraw.png` file.
+     *
+     * `.excalidraw.png` files are persisted by re-rasterising the editor canvas and
+     * replacing the file's bytes. That is only safe when the canvas content was
+     * actually loaded from THIS file — i.e. its embedded Excalidraw scene was
+     * successfully extracted at open time. A PNG that carries no embedded scene (a
+     * plain raster exported elsewhere) fails extraction; the canvas then holds stale
+     * or empty state unrelated to the file, and persisting it would silently destroy
+     * the user's image (it re-rendered "old/wrong elements" onto the file on disk).
+     *
+     * Set to true only in the PNG extraction-success branch of [wireLoadEndCallback];
+     * checked by [onSceneChanged] and [scheduleAutosave] before any PNG write. It is
+     * irrelevant for plain `.excalidraw` (JSON) files, which round-trip losslessly and
+     * are never gated by this flag.
+     *
+     * Written exclusively on the EDT (AD-05). Volatile for cross-thread visibility.
+     */
+    @Volatile
+    private var pngSceneExtracted: Boolean = false
+
+    /**
      * The most-recently received scene state, serialised as a JSON string via
      * [Gson.toJson]. Null until the first [onSceneChanged] call.
      *
@@ -533,6 +554,13 @@ class ExcalidrawFileEditor private constructor(
                                 // shows the scene (driven by __excalidrawLoadPng__ on the JS
                                 // side). Record the scene JSON for future auto-save use.
                                 currentSceneJson = msg.sceneJson
+                                // Seed the change-detection baseline from the extracted scene
+                                // so the post-extraction onChange echo is not mistaken for a
+                                // user edit (which would otherwise schedule a spurious rewrite).
+                                baselineElements = canonicalElements(elementsOf(msg.sceneJson))
+                                // Arm autosave: the canvas content now provably originates from
+                                // a successful load of THIS file, so persisting it is safe.
+                                pngSceneExtracted = true
                             }
                         }
                         // Re-route to EDT if a real Application is present; otherwise
@@ -664,33 +692,43 @@ class ExcalidrawFileEditor private constructor(
      */
     fun onSceneChanged(scene: SceneChangeMessage) {
         val work: () -> Unit = {
-            currentSceneJson = GSON.toJson(scene)
-            val newCanonical = canonicalElements(scene.elements)
-            val baseline = baselineElements
-            when {
-                baseline == null -> {
-                    // First change after load: this reflects the unedited scene
-                    // (Excalidraw fires onChange once the loaded scene renders).
-                    // Record it as the baseline; do NOT mark modified or write —
-                    // opening a file must not change it on disk.
-                    baselineElements = newCanonical
-                }
-                newCanonical == baseline -> {
-                    // No element-content change (theme/font re-render, selection,
-                    // scroll, …). Keep the latest scene JSON but do not persist.
-                }
-                else -> {
-                    // Genuine user edit: advance the baseline and schedule a save.
-                    baselineElements = newCanonical
-                    val wasModified = _modified
-                    _modified = true
-                    if (!wasModified) {
-                        // FileEditor.getPropModified() returns "modified" — use the method
-                        // instead of a non-existent PROP_MODIFIED field (IntelliJ API).
-                        propertyChangeSupport.firePropertyChange(FileEditor.getPropModified(), false, true)
+            if (isExcalidrawPng(file.name) && !pngSceneExtracted) {
+                // The scene was never successfully extracted from this .excalidraw.png
+                // (e.g. the file carries no embedded Excalidraw scene). The canvas holds
+                // stale/empty state unrelated to the file, so the event is dropped
+                // entirely: autosave must never overwrite the user's image with content
+                // that did not come from the file. currentSceneJson is deliberately left
+                // untouched so no later export can pick up this state.
+                LOG.debug("onSceneChanged ignored: no scene extracted yet for PNG '${file.path}'")
+            } else {
+                currentSceneJson = GSON.toJson(scene)
+                val newCanonical = canonicalElements(scene.elements)
+                val baseline = baselineElements
+                when {
+                    baseline == null -> {
+                        // First change after load: this reflects the unedited scene
+                        // (Excalidraw fires onChange once the loaded scene renders).
+                        // Record it as the baseline; do NOT mark modified or write —
+                        // opening a file must not change it on disk.
+                        baselineElements = newCanonical
                     }
-                    // Schedule (or reschedule) the debounced auto-save (task-04-004, AC-E3-01).
-                    scheduleAutosave()
+                    newCanonical == baseline -> {
+                        // No element-content change (theme/font re-render, selection,
+                        // scroll, …). Keep the latest scene JSON but do not persist.
+                    }
+                    else -> {
+                        // Genuine user edit: advance the baseline and schedule a save.
+                        baselineElements = newCanonical
+                        val wasModified = _modified
+                        _modified = true
+                        if (!wasModified) {
+                            // FileEditor.getPropModified() returns "modified" — use the method
+                            // instead of a non-existent PROP_MODIFIED field (IntelliJ API).
+                            propertyChangeSupport.firePropertyChange(FileEditor.getPropModified(), false, true)
+                        }
+                        // Schedule (or reschedule) the debounced auto-save (task-04-004, AC-E3-01).
+                        scheduleAutosave()
+                    }
                 }
             }
         }
@@ -720,6 +758,25 @@ class ExcalidrawFileEditor private constructor(
             }
         }
         return copy.toString()
+    }
+
+    /**
+     * Extracts the `elements` array from a serialised Excalidraw scene JSON string,
+     * returning an empty array when the input is null/blank/malformed or has no
+     * `elements` field. Used to seed the change-detection baseline from the scene
+     * extracted from a `.excalidraw.png` at open time.
+     */
+    private fun elementsOf(sceneJson: String?): JsonArray {
+        if (sceneJson.isNullOrBlank()) return JsonArray()
+        return try {
+            JsonParser.parseString(sceneJson)
+                ?.takeIf { it.isJsonObject }
+                ?.asJsonObject
+                ?.getAsJsonArray("elements")
+                ?: JsonArray()
+        } catch (_: Exception) {
+            JsonArray()
+        }
     }
 
     /**
@@ -755,6 +812,11 @@ class ExcalidrawFileEditor private constructor(
             if (isDisposed) return@Runnable
 
             if (isExcalidrawPng(file.name)) {
+                // Defense-in-depth: never re-export over a .excalidraw.png whose scene
+                // was not successfully extracted from the file itself. [onSceneChanged]
+                // already refuses to schedule autosave in that case, but guard here too
+                // so no future caller can route an unextracted PNG into a destructive write.
+                if (!pngSceneExtracted) return@Runnable
                 // PNG async path (task-07-008, AC-E6-02):
                 // The JS side will re-export the scene as a PNG and post the base64 result
                 // back via the bridge.  We must capture currentSceneJson NOW (at schedule

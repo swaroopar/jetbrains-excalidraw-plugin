@@ -172,10 +172,14 @@ class PngEditorIntegrationTest {
             debounceExecutor = {}
         )
         editorHolder = editor
-        // Establish the unedited baseline (initial onChange on scene load); a
-        // non-empty scene so the empty-elements edit below counts as a real change.
-        bridge.simulateSceneChange(
-            """{"type":"sceneChange","elements":[{"type":"__baseline__"}],"appState":{}}"""
+        // Arm the PNG editor through the realistic open path: loadEnd, then a successful
+        // extraction whose scene has one __baseline__ element. This sets pngSceneExtracted
+        // and seeds the baseline, so the empty-elements edit below counts as a real change.
+        stubHost.fireLoadEnd()
+        bridge.simulatePngExtracted(
+            """{"type":"pngExtracted","sceneJson":${com.google.gson.Gson().toJson(
+                """{"type":"excalidraw","elements":[{"type":"__baseline__"}],"appState":{}}"""
+            )}}"""
         )
 
         // Trigger a scene change so currentSceneJson is set
