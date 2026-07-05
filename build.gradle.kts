@@ -5,7 +5,63 @@ plugins {
 }
 
 group = providers.gradleProperty("pluginGroup").get()
-version = providers.gradleProperty("pluginVersion").get()
+
+// -----------------------------------------------------------------------------
+// Plugin version resolution.
+//
+// The git tag is the source of truth for RELEASED versions: .github/workflows/
+// release.yml computes the next version from the latest v* tag and injects it via
+// -PpluginVersion. So that a LOCAL build never stamps a stale, already-released
+// number (the old static gradle.properties default), the version is resolved in
+// this order:
+//
+//   1. -PpluginVersion=<x>     explicit override — the release workflow passes this → used verbatim.
+//   2. latest v* git tag       local dev build → the next PATCH as a -SNAPSHOT, e.g. tag v1.0.3
+//                              → 1.0.4-SNAPSHOT (clearly ahead of the last release, never colliding
+//                              with a published version).
+//   3. pluginVersionFallback   git/tags unavailable (shallow clone, source tarball) → the static
+//                              base version from gradle.properties.
+//
+// Note: with the configuration cache on, the derived (2) value is cached until the CC
+// entry is invalidated (build-script/gradle.properties change, or a new tag after
+// `--no-configuration-cache`). The release build passes both -PpluginVersion and
+// --no-configuration-cache, so releases are always exact.
+// -----------------------------------------------------------------------------
+val resolvedPluginVersion: String = run {
+    // (1) `providers.gradleProperty("pluginVersion")` resolves a -P override even though the
+    // key is intentionally absent from gradle.properties; it is null for a plain local build.
+    val explicit = providers.gradleProperty("pluginVersion").orNull
+    if (!explicit.isNullOrBlank()) {
+        explicit
+    } else {
+        val fallback = providers.gradleProperty("pluginVersionFallback").get()
+        // (2) Latest v* tag by descending version order. runCatching swallows a missing git /
+        // non-repo checkout so the build still works from a tarball.
+        val latestTag = runCatching {
+            providers.exec {
+                commandLine("git", "tag", "--list", "v*", "--sort=-v:refname")
+            }.standardOutput.asText.get()
+                .lineSequence()
+                .map(String::trim)
+                .firstOrNull { it.isNotEmpty() }
+        }.getOrNull()
+
+        if (latestTag.isNullOrBlank()) {
+            fallback // (3)
+        } else {
+            val base = latestTag.removePrefix("v")
+            val parts = base.split(".")
+            val patch = parts.getOrNull(2)?.toIntOrNull()
+            if (parts.size == 3 && patch != null) {
+                "${parts[0]}.${parts[1]}.${patch + 1}-SNAPSHOT"
+            } else {
+                // Unexpected tag shape (not MAJOR.MINOR.PATCH): still mark it a snapshot.
+                "$base-SNAPSHOT"
+            }
+        }
+    }
+}
+version = resolvedPluginVersion
 
 // javaVersion in gradle.properties is the authoritative compile target (sinceBuild=241 → 17).
 kotlin {
@@ -23,7 +79,7 @@ intellijPlatform {
     pluginConfiguration {
         id = "com.swaroop.excalidraw.plugin"
         name = "Excalidraw"
-        version = providers.gradleProperty("pluginVersion")
+        version = resolvedPluginVersion
 
         ideaVersion {
             sinceBuild = providers.gradleProperty("pluginSinceBuild")

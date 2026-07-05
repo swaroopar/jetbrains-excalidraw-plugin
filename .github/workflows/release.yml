@@ -55,7 +55,7 @@ jobs:
           if [ -n "$prev_tag" ]; then
             current="${prev_tag#v}"
           else
-            current=$(grep -E '^pluginVersion=' gradle.properties | cut -d= -f2 | tr -d '[:space:]')
+            current=$(grep -E '^pluginVersionFallback=' gradle.properties | cut -d= -f2 | tr -d '[:space:]')
           fi
           IFS='.' read -r major minor patch <<< "$current"
           case "${{ inputs.release_type }}" in
@@ -88,7 +88,8 @@ jobs:
 
       - name: Build plugin
         # Inject the version via -P so no version-bump commit is pushed to main; the tag
-        # is the source of truth. gradle.properties' pluginVersion is just the dev default.
+        # is the source of truth. Locally (no -P) build.gradle.kts derives the next-patch
+        # -SNAPSHOT from the latest tag; pluginVersionFallback is only the no-git fallback.
         run: ./gradlew buildPlugin -PpluginVersion=${{ steps.ver.outputs.next }} --no-configuration-cache
 
       - name: Create tag

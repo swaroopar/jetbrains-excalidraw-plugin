@@ -222,12 +222,18 @@ This produces the installable plugin distribution at:
 build/distributions/jetbrains-excalidraw-plugin-<version>.zip
 ```
 
-(currently `jetbrains-excalidraw-plugin-1.0.0.zip`, where the version comes from
-`pluginVersion` in `gradle.properties`).
+The `<version>` is derived from git: a local build with no override stamps the
+**next-patch `-SNAPSHOT`** ahead of the latest release tag (e.g. with `v1.0.3`
+released, the zip is `…-1.0.4-SNAPSHOT.zip`), so a locally-built plugin is clearly
+newer than the last release and never collides with a published version. Pass
+`-PpluginVersion=<x>` to stamp an exact version (this is what the release workflow
+does). When no git tags are available (shallow clone / source tarball), it falls back
+to `pluginVersionFallback` in `gradle.properties`. See `build.gradle.kts` for the
+full resolution order.
 
-This is the **same zip** that the CI workflow uploads as an artifact — following
-these steps locally reproduces the CI build exactly, because both run
-`./gradlew buildPlugin` against the same `gradle.properties` configuration.
+The release CI uploads the artifact built with the tag-derived version via
+`-PpluginVersion`; the git tag — not `gradle.properties` — is the source of truth for
+released versions.
 
 > **Local IDE SDK (optional, offline builds):** if you have a JetBrains IDE
 > installed and want to build without downloading the SDK, set `localIdePath`
