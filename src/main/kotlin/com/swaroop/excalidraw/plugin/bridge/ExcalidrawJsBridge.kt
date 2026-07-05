@@ -1,6 +1,7 @@
 package com.swaroop.excalidraw.plugin.bridge
 
 import com.google.gson.Gson
+import com.google.gson.JsonParser
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.Logger
@@ -8,6 +9,9 @@ import com.intellij.ui.jcef.JBCefBrowser
 import com.intellij.ui.jcef.JBCefJSQuery
 import com.swaroop.excalidraw.plugin.export.ExportMessage
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawScene
+import java.awt.Toolkit
+import java.awt.datatransfer.DataFlavor
+import java.awt.datatransfer.StringSelection
 
 /**
  * ExcalidrawJsBridge — typed bidirectional channel between Kotlin and the
@@ -58,7 +62,18 @@ class ExcalidrawJsBridge private constructor(
      * string-concatenating user/file data.  The payload identifier is a safe
      * JS variable reference, not untrusted content.
      */
-    private val jsQueryInject: (String) -> String = { "" }
+    private val jsQueryInject: (String) -> String = { "" },
+    /**
+     * Produces the JS expression that performs a request/response round-trip to the
+     * clipboard [JBCefJSQuery] (see [installClipboardBridge]). Unlike [jsQueryInject]
+     * (fire-and-forget), this uses the three-arg [JBCefJSQuery.inject] so the JS side
+     * receives the system-clipboard text back via an onSuccess callback.
+     *
+     * The lambda receives the JS identifiers holding the request payload and the
+     * success/failure callbacks, and returns the native query-call expression.
+     * In test mode it is a no-op stub.
+     */
+    private val clipboardInject: (reqVar: String, okVar: String, errVar: String) -> String = { _, _, _ -> "" }
 ) : Disposable {
 
     @Volatile
@@ -362,6 +377,88 @@ class ExcalidrawJsBridge private constructor(
     }
 
     /**
+     * Installs a clipboard bridge in the loaded page: routes the browser's async
+     * Clipboard API through the JVM system clipboard.
+     *
+     * Why this is needed: Excalidraw copy/paste uses `navigator.clipboard.readText()`
+     * / `writeText()` (and `read()`/`write()`). In embedded Chromium (JCEF) the async
+     * clipboard READ is gated behind a `clipboard-read` permission that has no UI and is
+     * auto-denied, so pasting fails with Excalidraw's "Couldn't paste (couldn't read from
+     * system clipboard)". JCEF exposes no permission-prompt hook to grant it. Instead we
+     * replace `navigator.clipboard` with a shim whose `readText`/`writeText`/`read`/`write`
+     * round-trip to Kotlin via a [JBCefJSQuery], and Kotlin reads/writes the real OS
+     * clipboard (see [readSystemClipboardText] / [writeSystemClipboardText]).
+     *
+     * `read()` returns the clipboard text wrapped as a `text/plain` `ClipboardItem`, and
+     * `write()` bridges the `text/plain` item — matching Excalidraw's element/text copy &
+     * paste (its serialised elements travel as `text/plain` JSON). Image (PNG) clipboard
+     * items are out of scope here and fall through to a no-op.
+     *
+     * Injected once per load (guarded by `__excalidrawClipboardInstalled__`), from the
+     * loadEnd callback like [installReturnChannel]; Excalidraw re-reads `navigator.clipboard`
+     * on every call, so replacing it after mount takes effect for all later copy/paste.
+     *
+     * A03: the request payload is a JSON string; the injected code contains no eval / no
+     * concatenation of untrusted data — only the fixed shim and the [JBCefJSQuery] call.
+     * After [dispose] this is a no-op.
+     */
+    fun installClipboardBridge() {
+        if (disposed) return
+        // The three-arg inject wires request → onSuccess(text) / onFailure(code,msg).
+        val queryCall = clipboardInject("requestJson", "onOk", "onErr")
+        val js = """
+            (function () {
+              if (window.__excalidrawClipboardInstalled__) { return; }
+              window.__excalidrawClipboardInstalled__ = true;
+              window.$CLIPBOARD_FN = function (requestJson, onOk, onErr) { $queryCall };
+              function bridge(reqObj) {
+                return new Promise(function (resolve, reject) {
+                  if (typeof window.$CLIPBOARD_FN !== "function") { reject(new Error("clipboard bridge unavailable")); return; }
+                  window.$CLIPBOARD_FN(JSON.stringify(reqObj),
+                    function (resp) { resolve(typeof resp === "string" ? resp : ""); },
+                    function (code, msg) { reject(new Error(msg || "clipboard bridge error")); });
+                });
+              }
+              var shim = {
+                readText: function () { return bridge({ op: "readText" }); },
+                writeText: function (text) { return bridge({ op: "writeText", text: (text == null ? "" : String(text)) }).then(function () { return undefined; }); },
+                read: function () {
+                  return bridge({ op: "readText" }).then(function (text) {
+                    if (!text) { return []; }
+                    return [new window.ClipboardItem({ "text/plain": new Blob([text], { type: "text/plain" }) })];
+                  });
+                },
+                write: function (items) {
+                  try {
+                    if (items && items.length) {
+                      var item = items[0];
+                      if (item && item.types && item.types.indexOf("text/plain") !== -1 && typeof item.getType === "function") {
+                        return item.getType("text/plain")
+                          .then(function (b) { return b.text(); })
+                          .then(function (t) { return bridge({ op: "writeText", text: String(t) }); })
+                          .then(function () { return undefined; });
+                      }
+                    }
+                  } catch (e) { /* fall through to no-op */ }
+                  return Promise.resolve();
+                }
+              };
+              try {
+                Object.defineProperty(navigator, "clipboard", { value: shim, configurable: true });
+              } catch (e) {
+                try {
+                  navigator.clipboard.readText = shim.readText;
+                  navigator.clipboard.writeText = shim.writeText;
+                  navigator.clipboard.read = shim.read;
+                  navigator.clipboard.write = shim.write;
+                } catch (e2) { /* clipboard not patchable — leave native (paste stays broken) */ }
+              }
+            })();
+        """.trimIndent()
+        injector(js)
+    }
+
+    /**
      * Invokes [readyHandler] with [signal].  Called in production by the
      * [JBCefJSQuery] message-router handler when the JS side calls the query
      * function.  Exposed internally so that unit tests can simulate the signal
@@ -608,6 +705,81 @@ class ExcalidrawJsBridge private constructor(
         const val LOAD_LIBRARY_FN: String = "__excalidrawLoadLibrary__"
 
         /**
+         * Stable JS window-function name installed by [installClipboardBridge]; the
+         * navigator.clipboard shim calls it to round-trip a clipboard request to Kotlin.
+         */
+        const val CLIPBOARD_FN: String = "__excalidrawClipboard__"
+
+        /**
+         * Handles a clipboard round-trip request from the JS shim installed by
+         * [installClipboardBridge]. Runs on a JCEF query thread and returns synchronously.
+         *
+         * Request shape: `{"op":"readText"}` or `{"op":"writeText","text":"..."}`.
+         * Returns the clipboard text (readText) or an empty string (writeText / on any
+         * failure) — a benign empty result is preferred to failing the JS promise, which
+         * would surface as an Excalidraw paste error even for an empty clipboard.
+         */
+        internal fun handleClipboardRequest(request: String): JBCefJSQuery.Response {
+            return try {
+                val obj = JsonParser.parseString(request)?.takeIf { it.isJsonObject }?.asJsonObject
+                    ?: return JBCefJSQuery.Response("")
+                when (obj.get("op")?.asString) {
+                    "readText" -> JBCefJSQuery.Response(readSystemClipboardText())
+                    "writeText" -> {
+                        writeSystemClipboardText(obj.get("text")?.asString ?: "")
+                        JBCefJSQuery.Response("")
+                    }
+                    else -> JBCefJSQuery.Response("")
+                }
+            } catch (e: Exception) {
+                LOG.warn("ExcalidrawJsBridge: clipboard request failed", e)
+                JBCefJSQuery.Response("")
+            }
+        }
+
+        /**
+         * Reads the OS clipboard's plain-text contents, or "" when it holds no text
+         * (e.g. an image only) or is momentarily locked. The clipboard is a shared OS
+         * resource; a brief retry rides out a transient lock held by another app.
+         */
+        private fun readSystemClipboardText(): String {
+            val clipboard = Toolkit.getDefaultToolkit().systemClipboard
+            repeat(CLIPBOARD_RETRIES) {
+                try {
+                    return clipboard.getData(DataFlavor.stringFlavor) as? String ?: ""
+                } catch (_: IllegalStateException) {
+                    sleepQuietly()          // clipboard busy — retry
+                } catch (_: Exception) {
+                    return ""               // no string flavor / IO — treat as empty
+                }
+            }
+            return ""
+        }
+
+        /** Writes [text] to the OS clipboard, retrying briefly through a transient lock. */
+        private fun writeSystemClipboardText(text: String) {
+            val clipboard = Toolkit.getDefaultToolkit().systemClipboard
+            repeat(CLIPBOARD_RETRIES) {
+                try {
+                    clipboard.setContents(StringSelection(text), null)
+                    return
+                } catch (_: IllegalStateException) {
+                    sleepQuietly()
+                }
+            }
+        }
+
+        private const val CLIPBOARD_RETRIES: Int = 3
+
+        private fun sleepQuietly() {
+            try {
+                Thread.sleep(20)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+        }
+
+        /**
          * Shared Gson instance — thread-safe for serialisation (Gson is immutable
          * after construction).  Used to encode the JSON payload into a JS string
          * literal: [Gson.toJson] with a [String] argument produces a properly
@@ -641,6 +813,10 @@ class ExcalidrawJsBridge private constructor(
             sceneChangeHandler: (SceneChangeMessage) -> Unit = {}
         ): ExcalidrawJsBridge {
             val jsQuery = JBCefJSQuery.create(browser)
+            // Separate query for the clipboard request/response round-trip (its handler
+            // returns a Response with the clipboard text; the main jsQuery is fire-and-forget).
+            val clipboardQuery = JBCefJSQuery.create(browser)
+            clipboardQuery.addHandler { request -> handleClipboardRequest(request) }
 
             val injector: (String) -> Unit = { jsCode ->
                 // A03: jsCode is produced exclusively by [loadScene] via Gson
@@ -651,11 +827,17 @@ class ExcalidrawJsBridge private constructor(
             val bridge = ExcalidrawJsBridge(
                 injector = injector,
                 readyHandler = readyHandler,
-                jsQueryDispose = { jsQuery.dispose() },
+                jsQueryDispose = {
+                    jsQuery.dispose()
+                    clipboardQuery.dispose()
+                },
                 sceneChangeHandler = sceneChangeHandler,
                 // A03: jsQuery.inject(payloadVar) produces the safe native
                 // JCEF query call expression — no user data concatenation.
-                jsQueryInject = { payloadVar -> jsQuery.inject(payloadVar) }
+                jsQueryInject = { payloadVar -> jsQuery.inject(payloadVar) },
+                // Three-arg inject: request payload + onSuccess/onFailure callbacks, so the
+                // clipboard text flows back to the JS shim. A03: same safe native call.
+                clipboardInject = { req, ok, err -> clipboardQuery.inject(req, ok, err) }
             )
 
             // Register the JS→Kotlin handler.  The handler receives the raw string
