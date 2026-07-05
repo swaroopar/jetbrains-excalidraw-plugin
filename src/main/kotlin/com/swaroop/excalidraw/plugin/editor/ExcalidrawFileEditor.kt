@@ -545,6 +545,10 @@ class ExcalidrawFileEditor private constructor(
                     // and requesting PNG extraction, so __excalidrawPostToKotlin__ is
                     // available when the JS side responds.
                     bridge.installReturnChannel()
+                    // Route the async Clipboard API through the JVM system clipboard —
+                    // JCEF auto-denies clipboard-read, so without this Excalidraw copy/paste
+                    // fails ("couldn't read from system clipboard").
+                    bridge.installClipboardBridge()
 
                     bridge.registerPngExtractedCallback { msg ->
                         // Callback arrives on the JCEF/bridge thread — route to EDT.
@@ -606,6 +610,10 @@ class ExcalidrawFileEditor private constructor(
                         // so that window.__excalidrawPostToKotlin__ is available as soon
                         // as Excalidraw's onChange fires (AD-04, task-03-005).
                         bridge.installReturnChannel()
+                        // Route the async Clipboard API through the JVM system clipboard —
+                        // JCEF auto-denies clipboard-read, so without this Excalidraw copy/paste
+                        // fails ("couldn't read from system clipboard").
+                        bridge.installClipboardBridge()
                         bridge.loadScene(scene)
                         // AC-E4-01 timing: push initial theme AFTER loadScene so that
                         // window.__excalidrawSetTheme__ (registered in index.jsx after
