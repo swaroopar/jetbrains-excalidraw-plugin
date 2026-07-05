@@ -7,6 +7,7 @@ import com.intellij.openapi.diagnostic.logger
 import com.intellij.util.concurrency.EdtScheduledExecutorService
 import com.intellij.ui.jcef.JBCefApp
 import com.intellij.ui.jcef.JBCefBrowser
+import com.intellij.ui.jcef.JcefShortcutProvider
 import org.cef.browser.CefBrowser
 import org.cef.browser.CefFrame
 import org.cef.callback.CefSchemeRegistrar
@@ -90,6 +91,7 @@ class ExcalidrawJcefHost private constructor(
             val host = ExcalidrawJcefHost(browser)
             host.registerLoadHandler()
             host.registerLifeSpanHandler()
+            host.releaseEditShortcutsToCanvas()
             // Diagnostics: launch with -Dexcalidraw.devtools=true (Help > Edit Custom VM
             // Options) to open the JCEF DevTools window and inspect the browser console /
             // network for a blank-canvas issue. Off by default.
@@ -188,6 +190,33 @@ class ExcalidrawJcefHost private constructor(
             },
             browser.cefBrowser
         )
+    }
+
+    /**
+     * Frees the platform edit shortcuts (Ctrl/⌘ + C/V/X/A/Z/Y) for the Excalidraw canvas.
+     *
+     * On macOS, [JBCefBrowser] auto-registers [JcefShortcutProvider] actions on its
+     * component ([JBCefBrowser.createComponent] → `if (SystemInfo.isMac)`), binding
+     * `$Copy`/`$Paste`/`$Cut`/`$SelectAll`/`$Undo`/`$Redo` to native `CefFrame` edit
+     * commands. Those native commands act only on a focused *editable DOM element* —
+     * but Excalidraw is a `<canvas>` app that implements copy/paste/cut/select-all/
+     * undo/redo entirely in its own JS `keydown` handlers. So the IDE grabs the
+     * keystroke, routes it to a native command that no-ops on the canvas, and
+     * Excalidraw never sees it — ⌘C/⌘V/⌘Z/⌘A/… do nothing.
+     *
+     * Unregistering those actions from the browser component lets the keystrokes fall
+     * through to the webview, where Excalidraw's handlers run (matching how the same
+     * shortcuts already work on Windows/Linux, where the platform never registers them).
+     *
+     * No-op off macOS (nothing was registered) and on JCEF API versions too old to
+     * expose the actions ([JcefShortcutProvider.getActions] returns an empty list).
+     * Guarded by `runCatching` so a platform API change can never break editor open.
+     */
+    private fun releaseEditShortcutsToCanvas() {
+        val component = browser?.component ?: return
+        runCatching {
+            JcefShortcutProvider.getActions().forEach { it.second.unregisterCustomShortcutSet(component) }
+        }.onFailure { LOG.warn("Excalidraw: could not release JCEF edit shortcuts to the canvas", it) }
     }
 
     /**
