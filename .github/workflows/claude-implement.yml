@@ -60,8 +60,7 @@ jobs:
             This is a one-shot, non-interactive run: there is no live session to
             deliver a background-task notification to, so any Agent/Task tool
             call you make in the background mode will never resume. Run every
-            sub-agent (including /code-review's two review sub-agents) in the
-            foreground (run_in_background: false) and wait for its result
+            sub-agent in the foreground (run_in_background: false) and wait for its result
             in-line before continuing.
 
             @${{ github.event.comment.user.login }} asked you to implement issue
@@ -83,8 +82,7 @@ jobs:
             3. Implement the issue as described above, following the /implement
                skill's process (TDD where possible at pre-agreed seams; run
                typechecking and single test files as you go; run the full test
-               suite and /code-review before finishing). Commit your work to that
-               branch.
+               suite). Commit your work to that branch.
             4. Push the branch to origin.
             5. Open a pull request with `gh pr create` targeting the repository's
                default branch. The PR body must include, in this order:
