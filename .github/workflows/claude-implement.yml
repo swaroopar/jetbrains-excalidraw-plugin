@@ -1,0 +1,100 @@
+name: Claude Implement Issue
+
+# Triggered by a comment on an ISSUE (not a PR) containing the trigger phrase
+# "@claude implement this". Claude then:
+#   1. acknowledges on the issue that it's starting,
+#   2. branches, implements the issue using the /implement skill, and commits,
+#   3. opens a PR (not just a "create PR" link — see prompt below) whose body
+#      acknowledges when work started and summarizes what changed,
+#   4. comments back on the issue with the PR link.
+#
+# Requires the Claude GitHub App (https://github.com/apps/claude) installed on
+# this repo, plus an ANTHROPIC_API_KEY (or CLAUDE_CODE_OAUTH_TOKEN) repository
+# secret. See https://github.com/anthropics/claude-code-action#quickstart.
+#
+# Only users with write access to the repo can trigger this action (enforced
+# by claude-code-action itself) — see its docs/security.md.
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  id-token: write
+
+jobs:
+  implement:
+    # issue_comment fires for comments on PRs too (a PR is an "issue" under the
+    # hood); github.event.issue.pull_request is only set for those, so this
+    # excludes them and keeps the trigger issue-only.
+    if: |
+      github.event.issue.pull_request == null &&
+      contains(github.event.comment.body, '@claude implement this')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Implement issue with Claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Or use an OAuth token instead:
+          # claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          trigger_phrase: "@claude implement this"
+          prompt: |
+            /implement
+
+            @${{ github.event.comment.user.login }} asked you to implement issue
+            #${{ github.event.issue.number }} in ${{ github.repository }} via this
+            comment: ${{ github.event.comment.html_url }}
+
+            ISSUE TITLE: ${{ github.event.issue.title }}
+            ISSUE BODY:
+            ${{ github.event.issue.body }}
+
+            Follow these steps in order:
+
+            1. Comment on issue #${{ github.event.issue.number }} (via `gh issue
+               comment`) acknowledging that you are starting the implementation
+               now, referencing the triggering comment.
+            2. Create and check out a new branch named
+               `claude/implement-issue-${{ github.event.issue.number }}` off the
+               current branch.
+            3. Implement the issue as described above, following the /implement
+               skill's process (TDD where possible at pre-agreed seams; run
+               typechecking and single test files as you go; run the full test
+               suite and /code-review before finishing). Commit your work to that
+               branch.
+            4. Push the branch to origin.
+            5. Open a pull request with `gh pr create` targeting the repository's
+               default branch. The PR body must include, in this order:
+               a. A "## Implementation started" section acknowledging that work
+                  began at ${{ github.event.comment.created_at }} in response to
+                  ${{ github.event.comment.html_url }} (issue
+                  #${{ github.event.issue.number }}).
+               b. A "## What changed" section summarizing the implementation and
+                  the files touched.
+               c. A "## Testing" section summarizing what you ran to verify it and
+                  the results.
+               d. `Closes #${{ github.event.issue.number }}`.
+            6. Comment on issue #${{ github.event.issue.number }} again with a
+               short note that the PR is open, including its number and link.
+
+            If the issue is too vague to implement or you get blocked, stop,
+            comment on the issue explaining what's missing, and do not open a PR.
+          claude_args: |
+            --allowedTools "Read,Edit,MultiEdit,Write,Glob,Grep,Bash"
