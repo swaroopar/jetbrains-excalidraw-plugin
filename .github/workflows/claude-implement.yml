@@ -57,6 +57,13 @@ jobs:
             /caveman
             /implement
 
+            This is a one-shot, non-interactive run: there is no live session to
+            deliver a background-task notification to, so any Agent/Task tool
+            call you make in the background mode will never resume. Run every
+            sub-agent (including /code-review's two review sub-agents) in the
+            foreground (run_in_background: false) and wait for its result
+            in-line before continuing.
+
             @${{ github.event.comment.user.login }} asked you to implement issue
             #${{ github.event.issue.number }} in ${{ github.repository }} via this
             comment: ${{ github.event.comment.html_url }}
@@ -97,4 +104,5 @@ jobs:
             comment on the issue explaining what's missing, and do not open a PR.
           show_full_output: true
           claude_args: |
+            --max-turns 75
             --allowedTools "Skill,Read,Edit,MultiEdit,Write,Glob,Grep,Bash"
