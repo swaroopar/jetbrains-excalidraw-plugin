@@ -7,13 +7,6 @@ out/
 node_modules/
 excalidraw-bundle/node_modules/
 src/main/resources/webview/
-
-# Worktrees created by the workflow
-.claude/worktrees/
-
-# Workflow runtime flag
-.claude/.workflow-active
-
 # OS / IDE
 .DS_Store
 
@@ -21,8 +14,6 @@ src/main/resources/webview/
 .intellijPlatform/
 .kotlin/
 **/__pycache__/
-.claude
-CLAUDE.md
 kb/
 .mcp.json
 .idea/
