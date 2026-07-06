@@ -1,0 +1,95 @@
+name: Claude Code Review
+
+# Triggered either by adding the "claude-review-requested" label to a pull
+# request, or by a comment "@claude please review" on a pull request
+# (issue_comment fires for comments on plain issues too — gated to PRs only
+# via github.event.issue.pull_request). Claude then:
+#   1. acknowledges on the PR that the review is starting,
+#   2. runs the /code-review skill (Standards + Spec axes) against the PR's
+#      base branch,
+#   3. posts the aggregated findings as a comment on the PR.
+#
+# Requires the Claude GitHub App (https://github.com/apps/claude) installed on
+# this repo, plus a CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY) repository
+# secret. See https://github.com/anthropics/claude-code-action#quickstart.
+#
+# Only users with write access to the repo can trigger this action (enforced
+# by claude-code-action itself) — see its docs/security.md.
+on:
+  pull_request:
+    types: [labeled]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+  id-token: write
+
+jobs:
+  review:
+    # For pull_request, only the "claude-review-requested" label fires this.
+    # For issue_comment, exclude plain-issue comments (github.event.issue.pull_request
+    # is only set for PR comments) and require the trigger phrase.
+    if: |
+      (github.event_name == 'pull_request' && github.event.label.name == 'claude-review-requested') ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request != null && contains(github.event.comment.body, '@claude please review'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Checkout PR head
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr checkout ${{ github.event.pull_request.number || github.event.issue.number }}
+
+      - name: Review PR with Claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          trigger_phrase: "@claude please review"
+          label_trigger: "claude-review-requested"
+          prompt: |
+            /caveman
+            /code-review
+
+            This is a one-shot, non-interactive run: there is no live session to
+            deliver a background-task notification to, so any Agent/Task tool
+            call you make in background mode will never resume. Run every
+            sub-agent (including /code-review's Standards and Spec sub-agents)
+            in the foreground (run_in_background: false) and wait for its
+            result in-line before continuing.
+
+            @${{ github.event.comment.user.login || github.event.sender.login }}
+            triggered a review of pull request
+            #${{ github.event.pull_request.number || github.event.issue.number }}
+            in ${{ github.repository }}, via
+            ${{ github.event_name == 'issue_comment' && 'a comment' || 'the claude-review-requested label' }}.
+
+            Follow these steps in order:
+
+            1. Comment on PR #${{ github.event.pull_request.number || github.event.issue.number }}
+               (via `gh pr comment`) acknowledging that the review is starting
+               now.
+            2. Determine the PR's base branch (`gh pr view
+               ${{ github.event.pull_request.number || github.event.issue.number }}
+               --json baseRefName -q .baseRefName`).
+            3. Run the /code-review skill using that base branch as the fixed
+               point.
+            4. Post the aggregated Standards and Spec findings as a single
+               comment on PR #${{ github.event.pull_request.number || github.event.issue.number }}
+               (via `gh pr comment`), using the "## Standards" / "## Spec"
+               headings and closing summary line from the skill's own report
+               format. If the Spec sub-agent had no spec to check against, say
+               so plainly instead of omitting the section.
+
+            If the diff against the base branch is empty, comment saying so and
+            stop — do not fabricate a review.
+          show_full_output: true
+          claude_args: |
+            --max-turns 75
+            --allowedTools "Skill,Read,Grep,Glob,Bash"
