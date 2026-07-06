@@ -3,7 +3,7 @@ name: Claude Implement Issue
 # Triggered by a comment on an ISSUE (not a PR) containing the trigger phrase
 # "@claude implement this". Claude then:
 #   1. acknowledges on the issue that it's starting,
-#   2. branches, implements the issue using the /implement skill, and commits,
+#   2. branches, implements the issue using /caveman + the /implement skill, and commits,
 #   3. opens a PR (not just a "create PR" link — see prompt below) whose body
 #      acknowledges when work started and summarizes what changed,
 #   4. comments back on the issue with the PR link.
@@ -56,6 +56,7 @@ jobs:
           # claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           trigger_phrase: "@claude implement this"
           prompt: |
+            /caveman
             /implement
 
             @${{ github.event.comment.user.login }} asked you to implement issue
