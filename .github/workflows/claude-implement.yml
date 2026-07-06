@@ -95,5 +95,6 @@ jobs:
 
             If the issue is too vague to implement or you get blocked, stop,
             comment on the issue explaining what's missing, and do not open a PR.
+          show_full_output: true
           claude_args: |
-            --allowedTools "Read,Edit,MultiEdit,Write,Glob,Grep,Bash"
+            --allowedTools "Skill,Read,Edit,MultiEdit,Write,Glob,Grep,Bash"
