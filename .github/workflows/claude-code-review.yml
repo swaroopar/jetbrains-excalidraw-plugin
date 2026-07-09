@@ -63,12 +63,12 @@ jobs:
           label_trigger: "claude-review-requested"
           prompt: |
             /caveman
-            /code-review
+            /code-review-skill
 
             This is a one-shot, non-interactive run: there is no live session to
             deliver a background-task notification to, so any Agent/Task tool
             call you make in background mode will never resume. Run every
-            sub-agent (including /code-review's Standards and Spec sub-agents)
+            sub-agent (including /code-review-skills's Standards and Spec sub-agents)
             in the foreground (run_in_background: false) and wait for its
             result in-line before continuing.
 
@@ -86,7 +86,7 @@ jobs:
             2. Determine the PR's base branch (`gh pr view
                ${{ github.event.pull_request.number || github.event.issue.number }}
                --json baseRefName -q .baseRefName`).
-            3. Run the /code-review skill using that base branch as the fixed
+            3. Run the /code-review-skill skill using that base branch as the fixed
                point.
             4. Post the aggregated Standards and Spec findings as a single
                comment on PR #${{ github.event.pull_request.number || github.event.issue.number }}
