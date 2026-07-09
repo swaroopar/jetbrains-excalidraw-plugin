@@ -48,6 +48,13 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x gradlew
 
+      - name: React to triggering comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
+            -f content=eyes
+
       - name: Implement issue with Claude
         uses: anthropics/claude-code-action@v1
         with:
