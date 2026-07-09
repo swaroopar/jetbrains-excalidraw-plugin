@@ -10,10 +10,29 @@ name: runIde smoke test
 # It does not assert pixel-level font rendering: JCEF canvas rendering needs a
 # GPU/display and is unreliable headless. The font *loading* path is covered by
 # the unit tests + the embedded-bytes fix.
+#
+# paths-ignore below means: if EVERY changed file is docs/CI-config-only
+# (README/CLAUDE.md, other markdown, assets, .github/**, dotfiles), skip the
+# run entirely — a change that touches any actual code still runs as normal,
+# since GitHub only skips a push/PR when *all* changed files match.
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - '.claude/**'
+      - '.claudeignore'
+      - '.github/**'
+      - '.gitignore'
+      - 'assets/**'
   pull_request:
+    paths-ignore:
+      - '**.md'
+      - '.claude/**'
+      - '.claudeignore'
+      - '.github/**'
+      - '.gitignore'
+      - 'assets/**'
   workflow_dispatch:
 
 jobs:
