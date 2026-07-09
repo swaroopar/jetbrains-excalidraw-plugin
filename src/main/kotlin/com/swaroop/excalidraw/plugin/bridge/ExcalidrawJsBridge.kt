@@ -80,33 +80,22 @@ class ExcalidrawJsBridge private constructor(
     private var disposed: Boolean = false
 
     /**
-     * One-shot callback slot for export results (JS→Kotlin, task-06-004).
-     *
-     * Volatile so that writes from the message-router thread are visible to the
-     * EDT thread that invokes [ApplicationManager.getApplication().invokeLater].
-     * Set to non-null by [registerExportResultCallback]; cleared to null after
-     * the first invocation so the callback fires at most once per registration.
+     * One-shot callback slot for export results (JS→Kotlin, task-06-004). Set by
+     * [registerExportResultCallback]; delivered exactly once via [OneShotCallback.deliver].
      */
-    @Volatile
-    private var exportResultCallback: ((ExportMessage.ExportResult) -> Unit)? = null
+    private val exportResultCallback = OneShotCallback<ExportMessage.ExportResult>()
 
     /**
-     * One-shot callback slot for PNG extraction results (JS→Kotlin, task-07-003).
-     *
-     * Set to non-null by [registerPngExtractedCallback]; cleared to null after
-     * the first invocation (one-shot delivery). After [dispose] this is always null.
+     * One-shot callback slot for PNG extraction results (JS→Kotlin, task-07-003). Set by
+     * [registerPngExtractedCallback]; delivered exactly once via [OneShotCallback.deliver].
      */
-    @Volatile
-    private var pngExtractedCallback: ((BridgeMessage.PngExtracted) -> Unit)? = null
+    private val pngExtractedCallback = OneShotCallback<BridgeMessage.PngExtracted>()
 
     /**
-     * One-shot callback slot for PNG export results (JS→Kotlin, task-07-003).
-     *
-     * Set to non-null by [registerPngExportedCallback]; cleared to null after
-     * the first invocation (one-shot delivery). After [dispose] this is always null.
+     * One-shot callback slot for PNG export results (JS→Kotlin, task-07-003). Set by
+     * [registerPngExportedCallback]; delivered exactly once via [OneShotCallback.deliver].
      */
-    @Volatile
-    private var pngExportedCallback: ((BridgeMessage.PngExported) -> Unit)? = null
+    private val pngExportedCallback = OneShotCallback<BridgeMessage.PngExported>()
 
     /**
      * Persistent (not one-shot) callback for library changes (JS→Kotlin). Set by
@@ -220,7 +209,7 @@ class ExcalidrawJsBridge private constructor(
      */
     fun registerExportResultCallback(cb: (ExportMessage.ExportResult) -> Unit) {
         if (disposed) return
-        exportResultCallback = cb
+        exportResultCallback.set(cb)
     }
 
     /**
@@ -266,7 +255,7 @@ class ExcalidrawJsBridge private constructor(
      */
     fun registerPngExtractedCallback(cb: (BridgeMessage.PngExtracted) -> Unit) {
         if (disposed) return
-        pngExtractedCallback = cb
+        pngExtractedCallback.set(cb)
     }
 
     /**
@@ -284,7 +273,7 @@ class ExcalidrawJsBridge private constructor(
      */
     fun registerPngExportedCallback(cb: (BridgeMessage.PngExported) -> Unit) {
         if (disposed) return
-        pngExportedCallback = cb
+        pngExportedCallback.set(cb)
     }
 
     /**
@@ -504,9 +493,8 @@ class ExcalidrawJsBridge private constructor(
 
     /**
      * Dispatches [json] through [BridgeMessage.fromJson] and, if the result is a
-     * [BridgeMessage.ExportResult], invokes [exportResultCallback] exactly once
-     * on the EDT via [ApplicationManager.getApplication().invokeLater], then
-     * clears the callback slot to null (one-shot delivery).
+     * [BridgeMessage.ExportResult], delivers it to [exportResultCallback] via
+     * [OneShotCallback.deliver] (at-most-once, on the EDT).
      *
      * After [dispose], this is a no-op.
      *
@@ -525,14 +513,7 @@ class ExcalidrawJsBridge private constructor(
         }
         when (message) {
             is BridgeMessage.ExportResult -> {
-                val cb = exportResultCallback
-                if (cb != null) {
-                    exportResultCallback = null
-                    // AD-05: dispatch to EDT; fall back to direct call in unit-test context.
-                    ApplicationManager.getApplication()?.invokeLater {
-                        cb(message.payload)
-                    } ?: cb(message.payload)
-                }
+                exportResultCallback.deliver(message.payload)
             }
             else -> {
                 LOG.warn("ExcalidrawJsBridge: unexpected message type in exportResult channel: ${message::class.simpleName}")
@@ -542,9 +523,8 @@ class ExcalidrawJsBridge private constructor(
 
     /**
      * Dispatches [json] through [BridgeMessage.fromJson] and, if the result is a
-     * [BridgeMessage.PngExtracted], invokes [pngExtractedCallback] exactly once
-     * on the EDT via [ApplicationManager.getApplication().invokeLater], then
-     * clears the callback slot to null (one-shot delivery).
+     * [BridgeMessage.PngExtracted], delivers it to [pngExtractedCallback] via
+     * [OneShotCallback.deliver] (at-most-once, on the EDT).
      *
      * After [dispose], this is a no-op.
      *
@@ -562,14 +542,7 @@ class ExcalidrawJsBridge private constructor(
         }
         when (message) {
             is BridgeMessage.PngExtracted -> {
-                val cb = pngExtractedCallback
-                if (cb != null) {
-                    pngExtractedCallback = null
-                    // AD-05: dispatch to EDT; fall back to direct call in unit-test context.
-                    ApplicationManager.getApplication()?.invokeLater {
-                        cb(message)
-                    } ?: cb(message)
-                }
+                pngExtractedCallback.deliver(message)
             }
             else -> {
                 LOG.warn("ExcalidrawJsBridge: unexpected message type in pngExtracted channel: ${message::class.simpleName}")
@@ -579,9 +552,8 @@ class ExcalidrawJsBridge private constructor(
 
     /**
      * Dispatches [json] through [BridgeMessage.fromJson] and, if the result is a
-     * [BridgeMessage.PngExported], invokes [pngExportedCallback] exactly once
-     * on the EDT via [ApplicationManager.getApplication().invokeLater], then
-     * clears the callback slot to null (one-shot delivery).
+     * [BridgeMessage.PngExported], delivers it to [pngExportedCallback] via
+     * [OneShotCallback.deliver] (at-most-once, on the EDT).
      *
      * After [dispose], this is a no-op.
      *
@@ -599,14 +571,7 @@ class ExcalidrawJsBridge private constructor(
         }
         when (message) {
             is BridgeMessage.PngExported -> {
-                val cb = pngExportedCallback
-                if (cb != null) {
-                    pngExportedCallback = null
-                    // AD-05: dispatch to EDT; fall back to direct call in unit-test context.
-                    ApplicationManager.getApplication()?.invokeLater {
-                        cb(message)
-                    } ?: cb(message)
-                }
+                pngExportedCallback.deliver(message)
             }
             else -> {
                 LOG.warn("ExcalidrawJsBridge: unexpected message type in pngExported channel: ${message::class.simpleName}")
@@ -621,9 +586,9 @@ class ExcalidrawJsBridge private constructor(
      */
     override fun dispose() {
         disposed = true
-        exportResultCallback = null
-        pngExtractedCallback = null
-        pngExportedCallback = null
+        exportResultCallback.clear()
+        pngExtractedCallback.clear()
+        pngExportedCallback.clear()
         jsQueryDispose?.invoke()
     }
 
@@ -852,36 +817,15 @@ class ExcalidrawJsBridge private constructor(
                         }
                     }
                     is BridgeMessage.ExportResult -> {
-                        // Dispatch to the one-shot callback slot on the bridge.
-                        // The bridge is captured here via the closure — thread-safe
-                        // because exportResultCallback is @Volatile.
-                        val cb = bridge.exportResultCallback
-                        if (cb != null) {
-                            bridge.exportResultCallback = null
-                            ApplicationManager.getApplication()?.invokeLater {
-                                cb(parsed.payload)
-                            }
-                        }
+                        // The bridge is captured here via the closure; OneShotCallback
+                        // itself handles the store-once/clear/deliver-on-EDT sequence.
+                        bridge.exportResultCallback.deliver(parsed.payload)
                     }
                     is BridgeMessage.PngExtracted -> {
-                        // Dispatch to the one-shot pngExtractedCallback slot on the bridge.
-                        val cb = bridge.pngExtractedCallback
-                        if (cb != null) {
-                            bridge.pngExtractedCallback = null
-                            ApplicationManager.getApplication()?.invokeLater {
-                                cb(parsed)
-                            }
-                        }
+                        bridge.pngExtractedCallback.deliver(parsed)
                     }
                     is BridgeMessage.PngExported -> {
-                        // Dispatch to the one-shot pngExportedCallback slot on the bridge.
-                        val cb = bridge.pngExportedCallback
-                        if (cb != null) {
-                            bridge.pngExportedCallback = null
-                            ApplicationManager.getApplication()?.invokeLater {
-                                cb(parsed)
-                            }
-                        }
+                        bridge.pngExportedCallback.deliver(parsed)
                     }
                     is BridgeMessage.LibraryChange -> {
                         // Persistent (not one-shot): fired on every library change.
@@ -935,5 +879,48 @@ class ExcalidrawJsBridge private constructor(
             // installReturnChannel JS output without a real JBCefJSQuery.
             jsQueryInject = { payloadVar -> "window.__jsBridgeStub__($payloadVar)" }
         )
+    }
+}
+
+/**
+ * A callback slot that fires at most once with the next value handed to [deliver],
+ * on the EDT (falling back to a direct call outside a live [ApplicationManager]
+ * context, e.g. unit tests).
+ *
+ * Replaces three hand-written copies of "store-once/clear/deliver-on-EDT" that
+ * previously lived on [ExcalidrawJsBridge] as separate `@Volatile` fields
+ * ([ExcalidrawJsBridge.registerExportResultCallback]/[ExcalidrawJsBridge.registerPngExtractedCallback]/
+ * [ExcalidrawJsBridge.registerPngExportedCallback]) with near-identical dispatch code.
+ *
+ * Volatile so that a [set] from one thread (the registering caller) and a [deliver]
+ * from another (the JCEF message-router thread) observe a consistent slot.
+ */
+private class OneShotCallback<T> {
+
+    @Volatile
+    private var callback: ((T) -> Unit)? = null
+
+    /** Stores [cb] to be delivered at most once by the next [deliver] call. */
+    fun set(cb: (T) -> Unit) {
+        callback = cb
+    }
+
+    /**
+     * If a callback is registered, clears the slot and invokes it with [value] exactly
+     * once — on the EDT via [ApplicationManager.getApplication].invokeLater, or directly
+     * if no [com.intellij.openapi.application.Application] is available (unit tests).
+     * A no-op if no callback is registered.
+     */
+    fun deliver(value: T) {
+        val cb = callback ?: return
+        callback = null
+        ApplicationManager.getApplication()?.invokeLater {
+            cb(value)
+        } ?: cb(value)
+    }
+
+    /** Clears the slot without delivering, so a pending callback never fires. */
+    fun clear() {
+        callback = null
     }
 }
