@@ -109,5 +109,6 @@ jobs:
             comment on the issue explaining what's missing, and do not open a PR.
           show_full_output: true
           claude_args: |
+            --model claude-haiku-4-5-20251001
             --max-turns 75
             --allowedTools "Skill,Read,Edit,MultiEdit,Write,Glob,Grep,Bash"
