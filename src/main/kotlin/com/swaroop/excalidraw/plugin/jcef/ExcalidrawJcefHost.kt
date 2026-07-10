@@ -69,7 +69,7 @@ class ExcalidrawJcefHost private constructor(
          * Max number of times to reload [START_URL] when the initial navigation fails
          * because the `excalidraw://` scheme isn't registered yet (startup race).
          */
-        private const val MAX_SCHEME_RELOADS: Int = 20
+        private const val MAX_SCHEME_RELOADS: Int = "3000"
 
         /** Delay between scheme-not-ready reload attempts (ms). */
         private const val SCHEME_RELOAD_DELAY_MS: Int = 250
