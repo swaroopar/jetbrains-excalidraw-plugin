@@ -437,7 +437,7 @@ class ExcalidrawJcefHost private constructor(
             // (bundle.js / bundle.css) are refused, leaving the canvas blank. Privacy is
             // still enforced by connect-src 'none' and the bundled-only scheme handler.
             registrar.addCustomScheme(
-                SCHEME,
+                SCHEMEAAAXXX,
                 /* isStandard    = */ true,
                 /* isLocal       = */ false,
                 /* isDisplayIsolated = */ false,
