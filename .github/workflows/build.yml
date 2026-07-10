@@ -8,8 +8,14 @@ name: Build Plugin
 # (README/CLAUDE.md, other markdown, assets, .github/**, dotfiles), skip the
 # run entirely — a change that touches any actual code still runs as normal,
 # since GitHub only skips a push/PR when *all* changed files match.
+#
+# push is restricted to main: without that, every PR-branch commit would run
+# this workflow twice (once via push, once via pull_request) for the same
+# commit — doubling build/test cost and, since claude-fix-ci.yml reacts to
+# each failing run separately, doubling its diagnosis cost too.
 on:
   push:
+    branches: [main]
     paths-ignore:
       - '**.md'
       - '.claude/**'
