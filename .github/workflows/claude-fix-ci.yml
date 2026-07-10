@@ -1,0 +1,155 @@
+name: Claude Fix CI
+
+# Triggered whenever one of our CI workflows finishes with a failure on a
+# pull request. Claude then:
+#   1. diagnoses the failing check via the /gh-fix-ci skill (gh CLI, run
+#      logs),
+#   2. drafts the smallest fix, and posts it as a PR review comment using
+#      GitHub's ```suggestion syntax so the author can click "Commit
+#      suggestion" to accept it, or just ignore it — Claude never pushes a
+#      commit or opens a PR itself (contents: read below, no write access),
+#   3. posts a second comment with the approximate Anthropic-reported cost of
+#      this run.
+#
+# workflow_run only populates `pull_requests` for same-repo PRs (not forks),
+# so forked-PR failures are skipped rather than guessed at.
+#
+# Requires the Claude GitHub App (https://github.com/apps/claude) installed on
+# this repo, plus a CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY) repository
+# secret. See https://github.com/anthropics/claude-code-action#quickstart.
+on:
+  workflow_run:
+    workflows: ["Build Plugin", "runIde smoke test"]
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  actions: read
+  id-token: write
+
+jobs:
+  suggest-fix:
+    if: |
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.pull_requests[0] != null
+    runs-on: ubuntu-latest
+    env:
+      PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.HEAD_SHA }}
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Diagnose failure and suggest a fix with Claude
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          additional_permissions: |
+            actions: read
+          prompt: |
+            /caveman
+            /gh-fix-ci
+
+            This is a one-shot, non-interactive run: there is no live session
+            and no human available to approve a plan mid-run, and any
+            Agent/Task tool call you make in background mode will never
+            resume. Run every sub-agent in the foreground
+            (run_in_background: false).
+
+            The "${{ github.event.workflow_run.name }}" workflow run
+            (${{ github.event.workflow_run.html_url }}, run id
+            ${{ github.event.workflow_run.id }}) failed for PR #${{ env.PR_NUMBER }}
+            in ${{ github.repository }} at commit ${{ env.HEAD_SHA }}.
+
+            Follow the /gh-fix-ci skill's steps 1-5 (verify gh auth, resolve
+            the PR, inspect the failing GitHub Actions check, scope out any
+            non-Actions checks, summarize the failure) against PR
+            #${{ env.PR_NUMBER }}. Then deviate from the skill for the
+            remaining steps as follows, because there is no one to approve a
+            plan and you must not modify anything yourself:
+
+              - Do NOT wait for approval, do NOT edit files, do NOT commit,
+                and do NOT open a PR. You only have read access to repo
+                contents in this job.
+              - You may run local commands (e.g. `./gradlew test`,
+                `./gradlew build`) read-only to reproduce/confirm the failure
+                and validate your proposed fix in your head, but discard any
+                local edits you make for that purpose — never commit them.
+              - Draft the smallest fix that would make the failing check
+                pass.
+              - If the fix is a contiguous change to a single existing file,
+                post it as a suggestion the author can accept with one click:
+                  gh api repos/${{ github.repository }}/pulls/${{ env.PR_NUMBER }}/comments \
+                    -f body="<1-2 sentence explanation of the failure and fix>
+
+                  \`\`\`suggestion
+                  <replacement lines, exactly as they should read after the fix>
+                  \`\`\`" \
+                    -f commit_id="${{ env.HEAD_SHA }}" \
+                    -f path="<repo-relative file path>" \
+                    -F line=<last line number of the range being replaced> \
+                    -F start_line=<first line number of the range being replaced> \
+                    -f start_side="RIGHT" \
+                    -f side="RIGHT"
+                (omit start_line/start_side entirely for a single-line fix).
+                Get path/line numbers from the file as it exists at
+                ${{ env.HEAD_SHA }} in this checkout. Mention in the comment
+                that replying "@claude apply fix" on this PR will have Claude
+                push this fix directly instead, if preferred.
+              - If the fix can't be expressed as one suggestion block (spans
+                multiple files, adds/deletes a file, etc.), instead post a
+                `gh pr comment ${{ env.PR_NUMBER }}` with a clear diff/patch
+                in a fenced code block and an explanation, and say explicitly
+                that it needs to be applied manually — or that replying
+                "@claude apply fix" on this PR will have Claude push it
+                directly.
+              - If you can't determine an actionable fix (inconclusive logs,
+                a flaky/infra failure, or a non-GitHub-Actions check), post a
+                `gh pr comment ${{ env.PR_NUMBER }}` explaining what's missing
+                instead of guessing.
+          show_full_output: true
+          claude_args: |
+            --max-turns 60
+            --allowedTools "Skill,Read,Grep,Glob,Bash"
+
+      - name: Post Claude cost estimate
+        if: always() && steps.claude.outputs.execution_file != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+        run: |
+          result=$(jq -c '.[-1] | select(.type == "result")' "$EXECUTION_FILE" 2>/dev/null || true)
+          if [ -z "$result" ]; then
+            echo "No result message in execution file; skipping cost comment."
+            exit 0
+          fi
+
+          cost=$(echo "$result" | jq -r '.total_cost_usd // empty')
+          if [ -z "$cost" ]; then
+            echo "No total_cost_usd in result; skipping cost comment."
+            exit 0
+          fi
+          turns=$(echo "$result" | jq -r '.num_turns // "?"')
+          duration_ms=$(echo "$result" | jq -r '.duration_ms // 0')
+          duration_s=$(awk "BEGIN { printf \"%.1f\", ${duration_ms} / 1000 }")
+          cost_fmt=$(awk "BEGIN { printf \"%.4f\", ${cost} }")
+
+          body=$(printf '%s\n\n%s' \
+            "🧮 **Claude CI-fix cost (approximate):** \$${cost_fmt} USD · ${turns} turns · ${duration_s}s" \
+            "Anthropic's self-reported cost for this automated CI-fix run only (not the whole PR's Claude usage). Actual billing may differ slightly, e.g. from prompt-cache discounts.")
+          gh pr comment "${{ env.PR_NUMBER }}" --body "$body"
