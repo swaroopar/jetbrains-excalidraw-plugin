@@ -1,8 +1,19 @@
 name: Claude Fix CI
 
-# Triggered whenever one of our CI workflows finishes with a failure on a
-# pull request. Claude then:
-#   1. diagnoses the failing check via the /gh-fix-ci skill (gh CLI, run
+# Triggered once per commit when its check suite finishes with a failure on a
+# pull request. check_suite (not workflow_run) is deliberate: a single commit
+# can fail multiple CI workflows at once (e.g. a compile break fails both
+# Build Plugin and runIde smoke test) — workflow_run fires once per failing
+# workflow, which drove duplicate diagnosis runs and duplicate PR comments for
+# the same root cause. check_suite fires once per commit after ALL of that
+# commit's check runs (across every workflow) have completed, so Claude's
+# /gh-fix-ci step sees every failing check in one pass via `gh pr checks`.
+# The concurrency group + cancel-in-progress below is a second safety net in
+# case a re-run still produces more than one check_suite completion for the
+# same PR.
+#
+# Claude then:
+#   1. diagnoses the failing check(s) via the /gh-fix-ci skill (gh CLI, run
 #      logs),
 #   2. drafts the smallest fix, and posts it as a PR review comment using
 #      GitHub's ```suggestion syntax so the author can click "Commit
@@ -11,16 +22,19 @@ name: Claude Fix CI
 #   3. posts a second comment with the approximate Anthropic-reported cost of
 #      this run.
 #
-# workflow_run only populates `pull_requests` for same-repo PRs (not forks),
-# so forked-PR failures are skipped rather than guessed at.
+# check_suite only populates `pull_requests` for same-repo PRs (not forks), so
+# forked-PR failures are skipped rather than guessed at.
 #
 # Requires the Claude GitHub App (https://github.com/apps/claude) installed on
 # this repo, plus a CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY) repository
 # secret. See https://github.com/anthropics/claude-code-action#quickstart.
 on:
-  workflow_run:
-    workflows: ["Build Plugin", "runIde smoke test"]
+  check_suite:
     types: [completed]
+
+concurrency:
+  group: claude-fix-ci-${{ github.event.check_suite.pull_requests[0].number }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -32,13 +46,12 @@ permissions:
 jobs:
   suggest-fix:
     if: |
-      github.event.workflow_run.conclusion == 'failure' &&
-      github.event.workflow_run.event == 'pull_request' &&
-      github.event.workflow_run.pull_requests[0] != null
+      github.event.check_suite.conclusion == 'failure' &&
+      github.event.check_suite.pull_requests[0] != null
     runs-on: ubuntu-latest
     env:
-      PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
-      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      PR_NUMBER: ${{ github.event.check_suite.pull_requests[0].number }}
+      HEAD_SHA: ${{ github.event.check_suite.head_sha }}
     steps:
       - name: Checkout PR head
         uses: actions/checkout@v7
@@ -71,17 +84,19 @@ jobs:
             resume. Run every sub-agent in the foreground
             (run_in_background: false).
 
-            The "${{ github.event.workflow_run.name }}" workflow run
-            (${{ github.event.workflow_run.html_url }}, run id
-            ${{ github.event.workflow_run.id }}) failed for PR #${{ env.PR_NUMBER }}
-            in ${{ github.repository }} at commit ${{ env.HEAD_SHA }}.
+            One or more CI checks failed for PR #${{ env.PR_NUMBER }} in
+            ${{ github.repository }} at commit ${{ env.HEAD_SHA }}. There may
+            be more than one failing check for this same commit (e.g. the
+            same compile error can fail both the build and the smoke-test
+            workflows) — treat them as one underlying failure to diagnose and
+            fix once, not once per check.
 
             Follow the /gh-fix-ci skill's steps 1-5 (verify gh auth, resolve
-            the PR, inspect the failing GitHub Actions check, scope out any
-            non-Actions checks, summarize the failure) against PR
-            #${{ env.PR_NUMBER }}. Then deviate from the skill for the
-            remaining steps as follows, because there is no one to approve a
-            plan and you must not modify anything yourself:
+            the PR, inspect ALL failing GitHub Actions checks for this PR via
+            `gh pr checks`, scope out any non-Actions checks, summarize the
+            failure(s)) against PR #${{ env.PR_NUMBER }}. Then deviate from
+            the skill for the remaining steps as follows, because there is no
+            one to approve a plan and you must not modify anything yourself:
 
               - Do NOT wait for approval, do NOT edit files, do NOT commit,
                 and do NOT open a PR. You only have read access to repo
@@ -90,8 +105,10 @@ jobs:
                 `./gradlew build`) read-only to reproduce/confirm the failure
                 and validate your proposed fix in your head, but discard any
                 local edits you make for that purpose — never commit them.
-              - Draft the smallest fix that would make the failing check
-                pass.
+              - Draft the smallest fix that would make the failing check(s)
+                pass. If multiple checks are failing for the same root cause,
+                draft one fix and say so; only draft more than one fix if the
+                failures are genuinely unrelated.
               - If the fix is a contiguous change to a single existing file,
                 post it as a suggestion the author can accept with one click:
                   gh api repos/${{ github.repository }}/pulls/${{ env.PR_NUMBER }}/comments \
@@ -122,6 +139,9 @@ jobs:
                 a flaky/infra failure, or a non-GitHub-Actions check), post a
                 `gh pr comment ${{ env.PR_NUMBER }}` explaining what's missing
                 instead of guessing.
+              - Post at most one suggestion/diff comment and one "can't
+                determine a fix" comment for this run — do not post once per
+                failing check.
           show_full_output: true
           claude_args: |
             --max-turns 60
