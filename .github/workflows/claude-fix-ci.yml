@@ -191,6 +191,7 @@ jobs:
                 failing check.
           show_full_output: true
           claude_args: |
+            --model claude-haiku-4-5-20251001
             --max-turns 60
             --allowedTools "Skill,Read,Grep,Glob,Bash"
 
