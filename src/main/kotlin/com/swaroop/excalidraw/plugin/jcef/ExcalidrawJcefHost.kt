@@ -444,7 +444,7 @@ class ExcalidrawJcefHost private constructor(
                 /* isSecure      = */ true,
                 /* isCorsEnabled = */ true,
                 /* isCspBypassing = */ false,
-                /* fetchEnabled  = */ true
+                /* fetchEnabled  = */ pass
             )
         }
 
