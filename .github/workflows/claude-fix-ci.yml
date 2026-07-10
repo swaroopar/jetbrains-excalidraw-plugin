@@ -37,6 +37,14 @@ name: Claude Fix CI
 # Requires the Claude GitHub App (https://github.com/apps/claude) installed on
 # this repo, plus a CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY) repository
 # secret. See https://github.com/anthropics/claude-code-action#quickstart.
+#
+# The suggestion comment is posted using the CI_FIX_SUGGESTION_TOKEN secret
+# (a PAT or GitHub App installation token), NOT the default GITHUB_TOKEN:
+# GitHub does not dispatch a new pull_request/push event for commits whose
+# provenance traces back to the repo's automatic GITHUB_TOKEN (anti-recursion
+# protection, see https://github.com/orgs/community/discussions/65321), which
+# meant clicking "Apply suggestion" on this bot's comment silently never
+# triggered CI to re-run. See docs/setup.md's github_token input.
 on:
   workflow_run:
     workflows: ["Build Plugin", "runIde smoke test"]
@@ -106,6 +114,11 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Overrides the action's default token (the ambient GITHUB_TOKEN)
+          # for its own gh/API calls, so the suggestion comment it posts
+          # below isn't attributed to GITHUB_TOKEN — see the `on:` comment
+          # above for why that matters.
+          github_token: ${{ secrets.CI_FIX_SUGGESTION_TOKEN }}
           additional_permissions: |
             actions: read
           prompt: |
