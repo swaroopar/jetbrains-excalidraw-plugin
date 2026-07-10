@@ -1,30 +1,37 @@
 name: Claude Apply CI Fix
 
 # Triggered by a comment on a PR containing the trigger phrase
-# "@claude apply fix" — the approval step for claude-fix-ci.yml's suggestions:
-# instead of the author clicking "Commit suggestion" on a single-block fix,
-# this lets them approve a fix (including multi-file ones claude-fix-ci.yml
-# could only describe, not suggest) and have Claude push it directly. Claude
-# then:
+# "@claude apply fix". This is the "human picks which fixes to take" step for
+# claude-fix-ci.yml's suggestions, but done through a real git push so CI
+# actually re-runs — unlike GitHub's native "Commit suggestion" button, whose
+# web-flow commit does not reliably dispatch pull_request/push events here.
+#
+# The approver selects fixes by reacting 👍 to the individual suggestion
+# comments claude-fix-ci.yml posted, then commenting "@claude apply fix".
+# Claude then:
 #   1. acknowledges on the PR that it's starting,
 #   2. checks out the PR's OWN branch (not a new one — this amends the
 #      existing PR, unlike claude-implement.yml which opens a fresh PR),
-#   3. looks for the fix claude-fix-ci.yml already proposed on this PR (a
-#      review-comment suggestion or a fallback diff comment, both posted as
-#      github-actions[bot]) and reuses it if it still applies; otherwise
-#      re-diagnoses via /gh-fix-ci,
-#   4. implements and verifies the fix (tests/build) before committing,
-#   5. commits and pushes straight to the PR branch so its checks re-run,
-#   6. comments back with what changed and the approximate Claude cost of
-#      this run.
+#   3. finds the suggestion comments the approver marked with 👍 and applies
+#      ONLY those, verbatim (it never re-derives or "improves" them),
+#   4. commits and pushes straight to the PR branch,
+#   5. comments back with which suggestions were applied and the approximate
+#      Claude cost of this run.
 #
-# Only works for PRs from this repo (not forks): GITHUB_TOKEN cannot push to
-# a fork's branch, so for fork PRs Claude will say so and stop rather than
-# fail silently.
+# The push MUST use a token that is not the automatic GITHUB_TOKEN, or GitHub's
+# anti-recursion protection silently drops the resulting pull_request/push
+# event and CI never re-runs. This workflow checks out (and therefore pushes)
+# with a CI_PAT secret — a personal access token (classic: `repo` scope; or a
+# fine-grained PAT with Contents: read/write) whose owner has write access to
+# the repo. A GitHub App installation token works too if you swap it in.
+#
+# Only works for PRs from this repo (not forks): the PAT cannot push to a
+# fork's branch, so for fork PRs Claude will say so and stop rather than fail
+# silently.
 #
 # Requires the Claude GitHub App (https://github.com/apps/claude) installed on
 # this repo, plus a CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY) repository
-# secret. See https://github.com/anthropics/claude-code-action#quickstart.
+# secret, and the CI_PAT secret described above.
 #
 # Only users with write access to the repo can trigger this action (enforced
 # by claude-code-action itself) — see its docs/security.md.
@@ -52,6 +59,9 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          # Push with a PAT (not GITHUB_TOKEN) so the resulting push is NOT
+          # dropped by GitHub's anti-recursion protection and CI re-runs.
+          token: ${{ secrets.CI_PAT }}
 
       - name: Set up JDK 17
         uses: actions/setup-java@v5
@@ -68,7 +78,7 @@ jobs:
 
       - name: Checkout PR branch
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.CI_PAT }}
         run: gh pr checkout ${{ github.event.issue.number }}
 
       - name: Make gradlew executable
@@ -98,51 +108,55 @@ jobs:
             ${{ github.event.comment.html_url }}
 
             You are already on the PR's own branch (checked out by this
-            job) — NOT a new branch. Follow these steps in order:
+            job) — NOT a new branch. This job pushes with a personal access
+            token (CI_PAT), not the automatic GITHUB_TOKEN, so a push here
+            re-runs the PR's CI automatically. Follow these steps in order:
 
             1. Comment on PR #${{ github.event.issue.number }} (via `gh pr
                comment`) acknowledging that you're starting now, referencing
                the triggering comment.
-            2. Look for a fix this bot already proposed on this PR, so you
-               apply what the approver actually reviewed rather than
-               re-deriving something different:
-               a. `gh api repos/${{ github.repository }}/pulls/${{ github.event.issue.number }}/comments`
-                  for a prior review comment from `github-actions[bot]`
-                  containing a \`\`\`suggestion block.
-               b. `gh api repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments`
-                  for a prior fallback comment from `github-actions[bot]`
-                  describing a multi-file diff/patch it couldn't post as a
-                  suggestion.
-               If you find one and it still applies cleanly to the current
-               branch tip (nothing since has changed the same lines/files in
-               a conflicting way) and the check it targeted is still failing,
-               use that exact fix as your starting point instead of
-               re-diagnosing from scratch.
-            3. If no prior suggestion exists, or the one you found is stale
-               (doesn't apply anymore, or the failure has changed), follow
-               the /gh-fix-ci skill's steps 1-5 (verify gh auth, resolve the
-               PR, inspect the failing GitHub Actions check(s), scope out any
-               non-Actions checks, summarize the failure) to diagnose it
-               fresh. If all checks are now passing (e.g. already fixed
-               another way), say so in a `gh pr comment` and stop — do not
-               invent a fix.
-            4. Implement the fix (the reused one or the freshly-diagnosed
-               one), then verify it locally (e.g. `./gradlew test`, or the
-               narrowest relevant test/build command) before committing — do
-               not commit an unverified fix.
-            5. Commit your changes to the current branch with a clear
-               message, then `git push` (no `--force`) to update the PR
-               branch directly. Do NOT create a new branch and do NOT open a
-               new pull request.
+            2. Find which fixes @${{ github.event.comment.user.login }}
+               selected. claude-fix-ci.yml posts each proposed fix as a PR
+               review comment containing a \`\`\`suggestion block. The
+               approver picks the ones they want by reacting 👍 to those
+               comments. List them and read each one's reactions:
+                 gh api repos/${{ github.repository }}/pulls/${{ github.event.issue.number }}/comments \
+                   --jq '.[] | {id, path, line, body}'
+                 gh api repos/${{ github.repository }}/pulls/comments/<COMMENT_ID>/reactions \
+                   --jq '.[] | select(.content=="+1") | .user.login'
+               A suggestion is APPROVED if
+               @${{ github.event.comment.user.login }} is among its 👍 (+1)
+               reactors. Only consider suggestion comments from this repo's
+               CI-fix automation — ignore unrelated review threads.
+            3. If NO suggestion carries the approver's 👍, do not guess or
+               invent a fix: post a `gh pr comment` asking them to react 👍 to
+               the specific suggestion(s) they want and then re-comment
+               "@claude apply fix", and stop. Likewise, if the checks those
+               suggestions targeted are already green, say so and stop.
+            4. Apply ONLY the approved suggestions, exactly as written —
+               verbatim. Do NOT re-derive, combine, reformat, or "improve"
+               them; the approver reviewed that exact text. Apply each
+               suggestion's replacement to the current content of its file
+               (match by the surrounding lines, since the branch tip may have
+               moved since the suggestion was posted). If an approved
+               suggestion no longer applies cleanly (its target lines have
+               since changed in a conflicting way), do not force it: comment
+               explaining that it's stale and stop. You MAY run a quick local
+               build/test (e.g. `./gradlew test`) as a courtesy, but CI is the
+               authority — never alter an approved suggestion just to make a
+               local build pass; note any concern in your summary instead.
+            5. Commit the applied change(s) with a clear message listing which
+               suggestions were applied, then `git push` (no `--force`) to
+               update the PR branch directly. Do NOT create a new branch and
+               do NOT open a new pull request.
             6. Comment on PR #${{ github.event.issue.number }} (via `gh pr
-               comment`) summarizing what changed and why, noting that CI
-               will re-run automatically on the push.
+               comment`) summarizing exactly which suggestions you applied,
+               noting that CI will re-run automatically on the push.
 
-            If you get blocked — you can't reproduce the failure, the fix
-            isn't safe to verify locally, or `git push` fails (for example
-            because this is a fork PR and the token lacks write access to
-            it) — stop, comment on the PR explaining what's blocking you, and
-            do not force anything.
+            If you get blocked — the approved suggestion is stale, or `git
+            push` fails (for example because this is a fork PR and the token
+            lacks write access to it) — stop, comment on the PR explaining
+            what's blocking you, and do not force anything.
           show_full_output: true
           claude_args: |
             --model claude-haiku-4-5-20251001

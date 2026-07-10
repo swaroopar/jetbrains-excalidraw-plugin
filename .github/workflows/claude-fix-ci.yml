@@ -24,10 +24,14 @@ name: Claude Fix CI
 # Claude then:
 #   1. diagnoses the failing check(s) via the /gh-fix-ci skill (gh CLI, run
 #      logs),
-#   2. drafts the smallest fix, and posts it as a PR review comment using
-#      GitHub's ```suggestion syntax so the author can click "Commit
-#      suggestion" to accept it, or just ignore it — Claude never pushes a
-#      commit or opens a PR itself (contents: read below, no write access),
+#   2. drafts the smallest fix and posts it as a PR review comment using
+#      GitHub's ```suggestion syntax. The author can either click "Commit
+#      suggestion" to apply it themselves, or react 👍 to the suggestion(s)
+#      they want and comment "@claude apply fix" to have claude-apply-ci-fix.yml
+#      push exactly those — the latter re-runs CI, which the native "Commit
+#      suggestion" button does not reliably do here. Claude never pushes a
+#      commit or opens a PR itself in this workflow (contents: read below, no
+#      write access),
 #   3. posts a second comment with the approximate Anthropic-reported cost of
 #      this run.
 #
@@ -159,9 +163,11 @@ jobs:
                     -f side="RIGHT"
                 (omit start_line/start_side entirely for a single-line fix).
                 Get path/line numbers from the file as it exists at
-                ${{ env.HEAD_SHA }} in this checkout. Mention in the comment
-                that replying "@claude apply fix" on this PR will have Claude
-                push this fix directly instead, if preferred.
+                ${{ env.HEAD_SHA }} in this checkout. End the comment with a
+                short note: "👍 this suggestion and comment `@claude apply fix`
+                to have Claude apply the approved suggestion(s) and re-run CI,
+                or click **Commit suggestion** to apply it yourself (note: the
+                button may not re-trigger CI)."
               - If the fix can't be expressed as one suggestion block (spans
                 multiple files, adds/deletes a file, etc.), instead post a
                 `gh pr comment ${{ env.PR_NUMBER }}` with a clear diff/patch
@@ -173,9 +179,11 @@ jobs:
                 a flaky/infra failure, or a non-GitHub-Actions check), post a
                 `gh pr comment ${{ env.PR_NUMBER }}` explaining what's missing
                 instead of guessing.
-              - Post at most one suggestion/diff comment and one "can't
-                determine a fix" comment for this run — do not post once per
-                failing check.
+              - Post one suggestion per genuinely distinct fix, so the author
+                can 👍 exactly the ones they want — but never post the same
+                fix twice: several checks failing from one root cause get a
+                single suggestion. Post at most one "can't determine a fix"
+                comment for this run.
           show_full_output: true
           claude_args: |
             --model claude-haiku-4-5-20251001
