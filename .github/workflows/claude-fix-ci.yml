@@ -1,16 +1,25 @@
 name: Claude Fix CI
 
-# Triggered once per commit when its check suite finishes with a failure on a
-# pull request. check_suite (not workflow_run) is deliberate: a single commit
-# can fail multiple CI workflows at once (e.g. a compile break fails both
-# Build Plugin and runIde smoke test) — workflow_run fires once per failing
-# workflow, which drove duplicate diagnosis runs and duplicate PR comments for
-# the same root cause. check_suite fires once per commit after ALL of that
-# commit's check runs (across every workflow) have completed, so Claude's
-# /gh-fix-ci step sees every failing check in one pass via `gh pr checks`.
-# The concurrency group + cancel-in-progress below is a second safety net in
-# case a re-run still produces more than one check_suite completion for the
-# same PR.
+# Triggered whenever one of our CI workflows finishes with a failure on a
+# pull request. Diagnosis is gated to run only once per commit even though
+# multiple workflows can fail from the same root cause (e.g. a compile break
+# fails both Build Plugin and runIde smoke test):
+#
+#   - Trigger is workflow_run, NOT check_suite: check_suite never fires for
+#     check suites GitHub Actions itself created (an anti-recursion rule —
+#     see "Automatic check suite created by GitHub Actions" in GitHub's
+#     events-that-trigger-workflows docs), which is every check in this repo.
+#     workflow_run fires once per finished workflow instead.
+#   - The `gate` job below asks the Checks API whether every check run for
+#     this commit has reached a terminal (`completed`) state yet. If another
+#     check for the same commit is still running, this completion is NOT the
+#     last one — skip, and let whichever workflow_run finishes last do the
+#     diagnosis (by then everything, including this failure, is visible via
+#     `gh pr checks`).
+#   - The concurrency group + cancel-in-progress is a second guard for the
+#     rarer case where two workflows finish close enough together that both
+#     see "all completed" — the later one starting cancels the earlier one
+#     if it's still running.
 #
 # Claude then:
 #   1. diagnoses the failing check(s) via the /gh-fix-ci skill (gh CLI, run
@@ -22,18 +31,19 @@ name: Claude Fix CI
 #   3. posts a second comment with the approximate Anthropic-reported cost of
 #      this run.
 #
-# check_suite only populates `pull_requests` for same-repo PRs (not forks), so
-# forked-PR failures are skipped rather than guessed at.
+# workflow_run only populates `pull_requests` for same-repo PRs (not forks),
+# so forked-PR failures are skipped rather than guessed at.
 #
 # Requires the Claude GitHub App (https://github.com/apps/claude) installed on
 # this repo, plus a CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY) repository
 # secret. See https://github.com/anthropics/claude-code-action#quickstart.
 on:
-  check_suite:
+  workflow_run:
+    workflows: ["Build Plugin", "runIde smoke test"]
     types: [completed]
 
 concurrency:
-  group: claude-fix-ci-${{ github.event.check_suite.pull_requests[0].number }}
+  group: claude-fix-ci-${{ github.event.workflow_run.pull_requests[0].number }}
   cancel-in-progress: true
 
 permissions:
@@ -41,17 +51,41 @@ permissions:
   pull-requests: write
   issues: write
   actions: read
+  checks: read
   id-token: write
 
 jobs:
-  suggest-fix:
+  gate:
     if: |
-      github.event.check_suite.conclusion == 'failure' &&
-      github.event.check_suite.pull_requests[0] != null
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.pull_requests[0] != null
+    runs-on: ubuntu-latest
+    outputs:
+      proceed: ${{ steps.check.outputs.proceed }}
+    steps:
+      - name: Check whether this commit's other checks are still running
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          pending=$(gh api "repos/${{ github.repository }}/commits/${{ github.event.workflow_run.head_sha }}/check-runs" --paginate \
+            --jq '[.check_runs[] | select(.status != "completed")] | length')
+          echo "Checks still running for this commit: $pending"
+          if [ "$pending" -gt 0 ]; then
+            echo "Not the last check to finish for this commit — a later workflow_run completion will trigger diagnosis instead."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  suggest-fix:
+    needs: gate
+    if: needs.gate.outputs.proceed == 'true'
     runs-on: ubuntu-latest
     env:
-      PR_NUMBER: ${{ github.event.check_suite.pull_requests[0].number }}
-      HEAD_SHA: ${{ github.event.check_suite.head_sha }}
+      PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
       - name: Checkout PR head
         uses: actions/checkout@v7
