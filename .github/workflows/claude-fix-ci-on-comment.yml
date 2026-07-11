@@ -1,0 +1,134 @@
+name: Claude Fix CI On Comment
+
+# The manual, on-demand counterpart to claude-fix-ci.yml. That workflow
+# auto-suggests CI fixes as ```suggestion comments, but is disabled for
+# Dependabot PRs (a dependency bump usually needs product-code changes we don't
+# want proposed unprompted). Comment "@claude fix ci" on ANY pull request to
+# trigger a fix here instead. Claude then:
+#   1. acknowledges on the PR that it's starting,
+#   2. diagnoses the PR's failing CI via the /gh-fix-ci skill,
+#   3. branches off the PR head, applies the smallest fix, and — instead of
+#      pushing to the PR branch or posting a suggestion — opens a SEPARATE pull
+#      request targeting the default branch (it carries the PR's changes plus
+#      the fix, so a Dependabot bump + its fix land together),
+#   4. comments back on the PR with a link to the new fix PR.
+#
+# issue_comment fires for comments on plain issues too; github.event.issue.pull_request
+# is only set for PR comments, so the gate below keeps this PR-only. Only users
+# with write access can trigger (enforced by claude-code-action).
+#
+# Note: this checks out and can build the PR head (untrusted code) with a write
+# token + secrets, same as claude-implement.yml. That's gated behind an explicit
+# write-access maintainer opting in per-PR via the comment.
+#
+# Requires the Claude GitHub App (https://github.com/apps/claude) installed on
+# this repo, plus a CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY) repository
+# secret. See https://github.com/anthropics/claude-code-action#quickstart.
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: read
+  checks: read
+  id-token: write
+
+jobs:
+  fix:
+    if: |
+      github.event.issue.pull_request != null &&
+      contains(github.event.comment.body, '@claude fix ci')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Check out the PR head
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr checkout ${{ github.event.issue.number }}
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: React to triggering comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
+            -f content=eyes
+
+      - name: Diagnose CI and open a fix PR with Claude
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          trigger_phrase: "@claude fix ci"
+          additional_permissions: |
+            actions: read
+          prompt: |
+            /caveman
+            /gh-fix-ci
+
+            This is a one-shot, non-interactive run: there is no live session
+            and no human available to approve a plan mid-run, and any Agent/Task
+            tool call you make in background mode will never resume. Run every
+            sub-agent in the foreground (run_in_background: false) and wait for
+            its result in-line before continuing.
+
+            @${{ github.event.comment.user.login }} asked you to fix the failing
+            CI on pull request #${{ github.event.issue.number }} in
+            ${{ github.repository }} via this comment:
+            ${{ github.event.comment.html_url }}
+
+            The PR head is already checked out. Follow these steps in order:
+
+            1. Comment on PR #${{ github.event.issue.number }} (via `gh pr
+               comment`) acknowledging you are starting now, referencing the
+               triggering comment.
+            2. Follow the /gh-fix-ci skill's steps 1-5 to inspect ALL failing
+               GitHub Actions checks for this PR (`gh pr checks`), scope out any
+               non-Actions checks, and summarize the failure(s). Treat multiple
+               checks failing from one root cause as a single fix.
+            3. Create and check out a new branch named
+               `claude/fix-ci-pr-${{ github.event.issue.number }}` off the
+               currently checked-out PR head.
+            4. Apply the smallest fix that would make the failing check(s) pass.
+               Reproduce/verify locally read-only where useful (e.g. `./gradlew
+               test`, `./gradlew buildPlugin`). Commit the fix to that branch.
+            5. Push the branch to origin.
+            6. Open a SEPARATE pull request with `gh pr create` targeting the
+               repository's default branch (NOT the original PR's branch).
+               Because it is branched off the PR head, it carries that PR's
+               changes plus your fix. The PR body must include, in this order:
+               a. A "## Fix started" section noting you began in response to
+                  ${{ github.event.comment.html_url }} on PR
+                  #${{ github.event.issue.number }}.
+               b. A "## Failure" section summarizing the failing check(s) and the
+                  root cause.
+               c. A "## Fix" section summarizing the change and the files touched.
+               d. A "## Testing" section summarizing what you ran and the results.
+            7. Comment on PR #${{ github.event.issue.number }} again with a short
+               note linking the new fix PR (its number and URL) and saying it
+               supersedes this PR once merged.
+
+            If you can't determine an actionable fix (inconclusive logs, a
+            flaky/infra failure, or a non-GitHub-Actions check), do NOT open a
+            PR — comment on PR #${{ github.event.issue.number }} explaining
+            what's missing instead.
+          show_full_output: true
+          claude_args: |
+            --model claude-haiku-4-5-20251001
+            --max-turns 60
+            --allowedTools "Skill,Read,Edit,MultiEdit,Write,Glob,Grep,Bash"
