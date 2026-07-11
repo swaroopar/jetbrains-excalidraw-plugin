@@ -157,6 +157,6 @@ jobs:
             what's missing instead.
           show_full_output: true
           claude_args: |
-            --model claude-haiku-4-5-20251001
+            --model claude-opus-4-8
             --max-turns 60
             --allowedTools "Skill,Read,Edit,MultiEdit,Write,Glob,Grep,Bash"
