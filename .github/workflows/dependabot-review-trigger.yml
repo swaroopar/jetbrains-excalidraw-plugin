@@ -1,0 +1,39 @@
+name: Dependabot Review Trigger
+
+# A deliberately minimal no-op whose ONLY purpose is to be a stable
+# workflow_run source for claude-review-dependabot.yml.
+#
+# Why this exists: a Dependabot-triggered `pull_request` run gets a
+# secret-less, read-only token, so the review can't run there directly; and
+# a `pull_request_target` run gets the secret but its OIDC token is rejected
+# by the claude[bot] app-token exchange ("401 Invalid OIDC token"), forcing a
+# github_token override that posts as github-actions[bot]. Hanging the review
+# off a workflow_run instead gives it a full base-repo context (secret +
+# write token + an OIDC token the exchange accepts → real claude[bot]).
+#
+# We can't hang it off the existing "Build Plugin"/"runIde smoke test"
+# workflows because both carry `paths-ignore: ['.github/**', ...]`, so a
+# github-actions-only Dependabot bump (which changes only .github/**) never
+# runs them — and a paths-filtered workflow produces no run, hence no
+# workflow_run event. This trigger has no paths-ignore, so it fires for every
+# Dependabot PR regardless of which files moved.
+#
+# It intentionally does nothing sensitive and needs no secrets. It runs on
+# every PR (the `on:` block can't filter by author), but the job is skipped
+# for non-Dependabot PRs, and the downstream review re-checks the actor too.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  trigger:
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Signal the Dependabot review workflow
+        run: |
+          echo "Dependabot PR #${{ github.event.pull_request.number }} detected."
+          echo "This run exists only as a workflow_run source for claude-review-dependabot.yml."
