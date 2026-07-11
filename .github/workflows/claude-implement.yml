@@ -93,9 +93,19 @@ jobs:
                skill's process (TDD where possible at pre-agreed seams; run
                typechecking and single test files as you go; run the full test
                suite). Commit your work to that branch.
-            4. Push the branch to origin.
-            5. Open a pull request with `gh pr create` targeting the repository's
-               default branch. The PR body must include, in this order:
+            4. Push the branch to origin. This push may be REJECTED for a
+               permissions reason even though your change is legitimate — most
+               commonly GitHub's "refusing to allow a GitHub App to create or
+               update workflow `.github/workflows/...` without workflows
+               permission". That can fire even when you changed NO workflow file,
+               if a workflow file was recently added or modified on the default
+               branch (the push token here lacks the `workflows` permission). If
+               the push is rejected for such a reason, do NOT keep retrying and
+               do NOT try to alter or delete workflow files to get around it —
+               skip straight to step 6 and report it.
+            5. If the push succeeded, open a pull request with `gh pr create`
+               targeting the repository's default branch. The PR body must
+               include, in this order:
                a. A "## Implementation started" section acknowledging that work
                   began at ${{ github.event.comment.created_at }} in response to
                   ${{ github.event.comment.html_url }} (issue
@@ -105,11 +115,25 @@ jobs:
                c. A "## Testing" section summarizing what you ran to verify it and
                   the results.
                d. `Closes #${{ github.event.issue.number }}`.
-            6. Comment on issue #${{ github.event.issue.number }} again with a
-               short note that the PR is open, including its number and link.
+            6. Comment on issue #${{ github.event.issue.number }} with the
+               outcome — always leave a comment, never end on a raw error:
+               - If the PR opened: a short note with its number and link.
+               - If the branch pushed but `gh pr create` failed (e.g. a
+                 permissions error): give the pushed branch name
+                 (`claude/implement-issue-${{ github.event.issue.number }}`) and
+                 ask a maintainer to open the PR from it manually.
+               - If the PUSH itself was rejected (so the branch never reached
+                 GitHub and is lost when this run ends): say so plainly, name the
+                 branch you committed to, list the files you changed with a short
+                 summary, AND paste the full diff (`git diff <base>...HEAD`) in a
+                 fenced ```diff block so the work isn't lost — a maintainer can
+                 apply it, or grant the push token the `workflows` permission and
+                 re-run. Do NOT present the work as merged or as an open PR when
+                 it isn't.
 
-            If the issue is too vague to implement or you get blocked, stop,
-            comment on the issue explaining what's missing, and do not open a PR.
+            If the issue is too vague to implement or you get blocked before you
+            have a change worth pushing, stop, comment on the issue explaining
+            what's missing, and do not open a PR.
           show_full_output: true
           claude_args: |
             --model claude-haiku-4-5-20251001
