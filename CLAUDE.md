@@ -162,3 +162,7 @@ Three GitHub Actions workflows:
 ## Development workflow
 - No changes must be pushed to main branch without a PR directly.
 - No dependencies must be added until approved by the team.
+
+## Specifications
+- Specifications are under the specs folder
+- update them as necessary whenever new topics are discussed or issues are addressed.
