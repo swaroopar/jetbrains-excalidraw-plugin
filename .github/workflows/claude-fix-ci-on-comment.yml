@@ -112,11 +112,21 @@ jobs:
                test`, `./gradlew buildPlugin`). Commit the fix to that branch.
                Never considering reverting the PR's changes - either fix the issue or update with
                a comment explaining why you can't and don't open a PR in this case. 
-            5. Push the branch to origin.
-            6. Open a SEPARATE pull request with `gh pr create` targeting the
-               repository's default branch (NOT the original PR's branch).
-               Because it is branched off the PR head, it carries that PR's
-               changes plus your fix. The PR body must include, in this order:
+            5. Push the branch to origin. This push may be REJECTED for a
+               permissions reason even though your fix is legitimate — most
+               commonly GitHub's "refusing to allow a GitHub App to create or
+               update workflow `.github/workflows/...` without workflows
+               permission". That can fire even when you changed NO workflow file,
+               if a workflow file was recently added or modified on the default
+               branch (the push token here lacks the `workflows` permission). If
+               the push is rejected for such a reason, do NOT keep retrying and
+               do NOT try to alter or delete workflow files to get around it —
+               skip straight to step 7 and report it.
+            6. If the push succeeded, open a SEPARATE pull request with `gh pr
+               create` targeting the repository's default branch (NOT the
+               original PR's branch). Because it is branched off the PR head, it
+               carries that PR's changes plus your fix. The PR body must include,
+               in this order:
                a. A "## Fix started" section noting you began in response to
                   ${{ github.event.comment.html_url }} on PR
                   #${{ github.event.issue.number }}.
@@ -124,9 +134,22 @@ jobs:
                   root cause.
                c. A "## Fix" section summarizing the change and the files touched.
                d. A "## Testing" section summarizing what you ran and the results.
-            7. Comment on PR #${{ github.event.issue.number }} again with a short
-               note linking the new fix PR (its number and URL) and saying it
-               supersedes this PR once merged.
+            7. Comment on PR #${{ github.event.issue.number }} with the outcome —
+               always leave a comment, never end on a raw error:
+               - If the fix PR opened: a short note linking it (number and URL)
+                 and saying it supersedes this PR once merged.
+               - If the branch pushed but `gh pr create` failed (e.g. a
+                 permissions error): give the pushed branch name
+                 (`claude/fix-ci-pr-${{ github.event.issue.number }}`) and ask a
+                 maintainer to open the PR from it manually.
+               - If the PUSH itself was rejected (so the branch never reached
+                 GitHub and is lost when this run ends): say so plainly, name the
+                 branch you committed to, list the files you changed with a short
+                 summary, AND paste the full diff (`git diff <base>...HEAD`) in a
+                 fenced ```diff block so the work isn't lost — a maintainer can
+                 apply it, or grant the push token the `workflows` permission and
+                 re-run. Do NOT present the work as merged or as an open PR when
+                 it isn't.
 
             If you can't determine an actionable fix (inconclusive logs, a
             flaky/infra failure, or a non-GitHub-Actions check), do NOT open a
