@@ -13,17 +13,28 @@ name: Claude Apply CI Fix
 #   2. checks out the PR's OWN branch (not a new one — this amends the
 #      existing PR, unlike claude-implement.yml which opens a fresh PR),
 #   3. finds the suggestion comments the approver marked with 👍 and applies
-#      ONLY those, verbatim (it never re-derives or "improves" them),
-#   4. commits and pushes straight to the PR branch,
-#   5. comments back with which suggestions were applied and the approximate
+#      ONLY those, verbatim (it never re-derives or "improves" them), leaving
+#      them as uncommitted edits — a later step in this same job commits and
+#      pushes them (see below for why Claude doesn't do this part itself),
+#   4. comments back with which suggestions were applied and the approximate
 #      Claude cost of this run.
 #
 # The push MUST use a token that is not the automatic GITHUB_TOKEN, or GitHub's
 # anti-recursion protection silently drops the resulting pull_request/push
-# event and CI never re-runs. This workflow checks out (and therefore pushes)
-# with a CI_PAT secret — a personal access token (classic: `repo` scope; or a
-# fine-grained PAT with Contents: read/write) whose owner has write access to
-# the repo. A GitHub App installation token works too if you swap it in.
+# event and CI never re-runs. This workflow checks out with a CI_PAT secret —
+# a personal access token (classic: `repo` scope; or a fine-grained PAT with
+# Contents: read/write) whose owner has write access to the repo. A GitHub App
+# installation token works too if you swap it in.
+#
+# Claude itself never runs `git commit`/`git push` here: even with CI_PAT
+# passed as claude-code-action's `github_token`, a PAT-authenticated push
+# performed *by the action* did not trigger CI in testing (see PR #68) — the
+# action's internal git/credential handling for its own commits is opaque and
+# apparently doesn't guarantee CI_PAT is what ends up on the remote. Claude
+# only edits files; the plain "Commit and push the applied fix" step below
+# does the actual `git commit`/`git push`, using the CI_PAT credential
+# `actions/checkout` already configured for this job — the same mechanism
+# confirmed to reliably trigger CI for ordinary pushes.
 #
 # Only works for PRs from this repo (not forks): the PAT cannot push to a
 # fork's branch, so for fork PRs Claude will say so and stop rather than fail
@@ -154,23 +165,51 @@ jobs:
                build/test (e.g. `./gradlew test`) as a courtesy, but CI is the
                authority — never alter an approved suggestion just to make a
                local build pass; note any concern in your summary instead.
-            5. Commit the applied change(s) with a clear message listing which
-               suggestions were applied, then `git push` (no `--force`) to
-               update the PR branch directly. Do NOT create a new branch and
-               do NOT open a new pull request.
+            5. Do NOT run `git add`, `git commit`, `git push`, or any other
+               git write command yourself. Leave the applied change(s) as
+               uncommitted edits in the working tree — a later step in this
+               same job commits and pushes them for you (using a token
+               confirmed to reliably re-trigger CI, unlike git operations run
+               from inside this action). Do NOT create a new branch and do
+               NOT open a new pull request.
             6. Comment on PR #${{ github.event.issue.number }} (via `gh pr
                comment`) summarizing exactly which suggestions you applied,
-               noting that CI will re-run automatically on the push.
+               noting that this job will commit and push them automatically
+               right after you finish, which will re-run CI.
 
-            If you get blocked — the approved suggestion is stale, or `git
-            push` fails (for example because this is a fork PR and the token
-            lacks write access to it) — stop, comment on the PR explaining
-            what's blocking you, and do not force anything.
+            If you get blocked — no suggestion carries the approver's 👍, or
+            the approved suggestion is stale — stop, comment on the PR
+            explaining what's blocking you, and do not force anything. Do not
+            worry about push failures (e.g. a fork PR lacking write access):
+            that happens in a later step outside your control, and will be
+            visible in the job's own logs if it fails.
           show_full_output: true
           claude_args: |
             --model claude-haiku-4-5-20251001
             --max-turns 75
             --allowedTools "Skill,Read,Edit,MultiEdit,Write,Glob,Grep,Bash"
+
+      # Does the actual commit/push instead of Claude (see the file-level
+      # comment above for why) — explicitly re-embeds CI_PAT in the remote
+      # URL so this push is unambiguously not GITHUB_TOKEN-authenticated,
+      # regardless of what credential earlier steps left configured.
+      - name: Commit and push the applied fix
+        if: steps.claude.outcome == 'success'
+        env:
+          CI_PAT: ${{ secrets.CI_PAT }}
+        run: |
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "No file changes from Claude — nothing to commit (it likely stopped early, e.g. no suggestion was approved). See its PR comment for why."
+            exit 0
+          fi
+          git config user.name "claude-apply-ci-fix[bot]"
+          git config user.email "actions@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${CI_PAT}@github.com/${{ github.repository }}.git"
+          git add -A
+          git commit -m "Apply approved CI-fix suggestion(s) via @claude apply fix
+
+          Requested by @${{ github.event.comment.user.login }}: ${{ github.event.comment.html_url }}"
+          git push
 
       - name: Post Claude cost estimate
         if: always() && steps.claude.outputs.execution_file != ''
