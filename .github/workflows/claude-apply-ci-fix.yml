@@ -19,30 +19,38 @@ name: Claude Apply CI Fix
 #   4. comments back with which suggestions were applied and the approximate
 #      Claude cost of this run.
 #
-# The push MUST use a token that is not the automatic GITHUB_TOKEN, or GitHub's
-# anti-recursion protection silently drops the resulting pull_request/push
-# event and CI never re-runs. This workflow checks out with a CI_PAT secret —
-# a personal access token (classic: `repo` scope; or a fine-grained PAT with
-# Contents: read/write) whose owner has write access to the repo. A GitHub App
-# installation token works too if you swap it in.
+# The push MUST NOT be authenticated as the automatic GITHUB_TOKEN, or
+# GitHub's anti-recursion protection silently drops the resulting
+# pull_request/push event and CI never re-runs. A fine-grained PAT was tried
+# first (PR #67/#68) and did NOT work either — even a fully manual `git push`
+# with the PAT embedded directly in the remote URL, run from inside this job,
+# never triggered CI, while the exact same push run from *outside* any
+# Actions job (e.g. a human's machine) worked immediately. That points at a
+# GitHub Actions installation access token (minted from a GitHub App, not a
+# personal access token) as the mechanism that's actually documented to
+# behave differently here. This workflow mints one at runtime from the
+# CI_APP_ID / CI_APP_PRIVATE_KEY secrets (a small GitHub App installed on
+# this repo only, with Contents: read/write + Pull requests: read/write) via
+# actions/create-github-app-token.
 #
-# Claude itself never runs `git commit`/`git push` here: even with CI_PAT
-# passed as claude-code-action's `github_token`, a PAT-authenticated push
+# Claude itself never runs `git commit`/`git push` here: even when a working
+# push credential was passed as claude-code-action's `github_token`, a push
 # performed *by the action* did not trigger CI in testing (see PR #68) — the
-# action's internal git/credential handling for its own commits is opaque and
-# apparently doesn't guarantee CI_PAT is what ends up on the remote. Claude
-# only edits files; the plain "Commit and push the applied fix" step below
-# does the actual `git commit`/`git push`, using the CI_PAT credential
-# `actions/checkout` already configured for this job — the same mechanism
-# confirmed to reliably trigger CI for ordinary pushes.
+# action's internal git/credential handling for its own commits is opaque.
+# Claude only edits files; the plain "Commit and push the applied fix" step
+# below does the actual `git commit`/`git push`, using the minted App token
+# directly. Its git commit author is set to `claude[bot]` (the Claude GitHub
+# App's identity, cosmetic only) for visual consistency with the rest of this
+# CI-fix flow, even though the push itself authenticates as this repo's own
+# separate App installation, not Anthropic's Claude App.
 #
-# Only works for PRs from this repo (not forks): the PAT cannot push to a
-# fork's branch, so for fork PRs Claude will say so and stop rather than fail
-# silently.
+# Only works for PRs from this repo (not forks): an installation token can't
+# push to a fork's branch, so for fork PRs Claude will say so and stop rather
+# than fail silently.
 #
 # Requires the Claude GitHub App (https://github.com/apps/claude) installed on
 # this repo, plus a CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY) repository
-# secret, and the CI_PAT secret described above.
+# secret, and the CI_APP_ID / CI_APP_PRIVATE_KEY secrets described above.
 #
 # Only users with write access to the repo can trigger this action (enforced
 # by claude-code-action itself) — see its docs/security.md.
@@ -66,13 +74,20 @@ jobs:
       contains(github.event.comment.body, '@claude apply fix')
     runs-on: ubuntu-latest
     steps:
+      - name: Mint a GitHub App installation token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.CI_APP_ID }}
+          private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
+
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          # Push with a PAT (not GITHUB_TOKEN) so the resulting push is NOT
-          # dropped by GitHub's anti-recursion protection and CI re-runs.
-          token: ${{ secrets.CI_PAT }}
+          # Use the minted App token (not GITHUB_TOKEN) so the resulting push
+          # is NOT dropped by GitHub's anti-recursion protection and CI re-runs.
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Set up JDK 17
         uses: actions/setup-java@v5
@@ -89,7 +104,7 @@ jobs:
 
       - name: Checkout PR branch
         env:
-          GH_TOKEN: ${{ secrets.CI_PAT }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: gh pr checkout ${{ github.event.issue.number }}
 
       - name: Make gradlew executable
@@ -100,15 +115,10 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # Use the PAT (not the ambient GITHUB_TOKEN) for every git/gh/API
-          # operation Claude performs — the commit AND the push. This is the
-          # difference from PR #63, which only changed the token that *posts*
-          # the suggestion comment: whether Claude pushes via local `git` (the
-          # checkout's persisted PAT credentials) or via the GitHub API (this
-          # input), the resulting commit's provenance must be the PAT, not
-          # GITHUB_TOKEN, or GitHub's anti-recursion protection drops the
-          # pull_request/push event and CI never re-runs.
-          github_token: ${{ secrets.CI_PAT }}
+          # Use the minted App token (not the ambient GITHUB_TOKEN) for every
+          # gh/API call Claude makes here (it no longer pushes itself — see
+          # the file-level comment above).
+          github_token: ${{ steps.app-token.outputs.token }}
           trigger_phrase: "@claude apply fix"
           additional_permissions: |
             actions: read
@@ -128,9 +138,10 @@ jobs:
             ${{ github.event.comment.html_url }}
 
             You are already on the PR's own branch (checked out by this
-            job) — NOT a new branch. This job pushes with a personal access
-            token (CI_PAT), not the automatic GITHUB_TOKEN, so a push here
-            re-runs the PR's CI automatically. Follow these steps in order:
+            job) — NOT a new branch. This job pushes with a GitHub App
+            installation token, not the automatic GITHUB_TOKEN, so a push
+            here re-runs the PR's CI automatically. Follow these steps in
+            order:
 
             1. Comment on PR #${{ github.event.issue.number }} (via `gh pr
                comment`) acknowledging that you're starting now, referencing
@@ -190,21 +201,24 @@ jobs:
             --allowedTools "Skill,Read,Edit,MultiEdit,Write,Glob,Grep,Bash"
 
       # Does the actual commit/push instead of Claude (see the file-level
-      # comment above for why) — explicitly re-embeds CI_PAT in the remote
-      # URL so this push is unambiguously not GITHUB_TOKEN-authenticated,
-      # regardless of what credential earlier steps left configured.
+      # comment above for why) — explicitly re-embeds the minted App token in
+      # the remote URL so this push is unambiguously not GITHUB_TOKEN-
+      # authenticated, regardless of what credential earlier steps left
+      # configured. Commit author is set to claude[bot] purely for display
+      # consistency with the rest of this CI-fix flow — see the file-level
+      # comment above.
       - name: Commit and push the applied fix
         if: steps.claude.outcome == 'success'
         env:
-          CI_PAT: ${{ secrets.CI_PAT }}
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           if git diff --quiet && git diff --cached --quiet; then
             echo "No file changes from Claude — nothing to commit (it likely stopped early, e.g. no suggestion was approved). See its PR comment for why."
             exit 0
           fi
-          git config user.name "claude-apply-ci-fix[bot]"
-          git config user.email "actions@users.noreply.github.com"
-          git remote set-url origin "https://x-access-token:${CI_PAT}@github.com/${{ github.repository }}.git"
+          git config user.name "claude[bot]"
+          git config user.email "41898282+claude[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${APP_TOKEN}@github.com/${{ github.repository }}.git"
           git add -A
           git commit -m "Apply approved CI-fix suggestion(s) via @claude apply fix
 
