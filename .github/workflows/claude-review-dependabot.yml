@@ -109,7 +109,10 @@ jobs:
       - name: Post Claude cost estimate
         if: always() && steps.claude.outputs.execution_file != ''
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Use the Claude App token the action minted (falling back to the
+          # workflow token if it's ever unavailable) so the cost comment posts
+          # as claude[bot], matching the review comment — not github-actions[bot].
+          GH_TOKEN: ${{ steps.claude.outputs.github_token || secrets.GITHUB_TOKEN }}
           EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
         run: |
           result=$(jq -c '.[-1] | select(.type == "result")' "$EXECUTION_FILE" 2>/dev/null || true)
