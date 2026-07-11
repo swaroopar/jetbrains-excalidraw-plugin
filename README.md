@@ -261,3 +261,4 @@ To get a build without compiling locally: open the **Actions** tab on GitHub,
 select a successful workflow run, and download the **`plugin-distribution`**
 artifact from the run's *Artifacts* section. The downloaded zip installs via
 **Install Plugin from Disk** exactly as described above.
+// diagnostic-comment-1783744136
