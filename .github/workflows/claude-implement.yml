@@ -56,6 +56,7 @@ jobs:
             -f content=eyes
 
       - name: Implement issue with Claude
+        id: claude
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -139,3 +140,33 @@ jobs:
             --model claude-haiku-4-5-20251001
             --max-turns 75
             --allowedTools "Skill,Read,Edit,MultiEdit,Write,Glob,Grep,Bash"
+
+      - name: Post Claude cost estimate
+        if: always() && steps.claude.outputs.execution_file != ''
+        env:
+          # Use the Claude App token the action minted (falling back to the
+          # workflow token if it's ever unavailable) so the cost comment posts
+          # as claude[bot], matching Claude's other comments — not github-actions[bot].
+          GH_TOKEN: ${{ steps.claude.outputs.github_token || secrets.GITHUB_TOKEN }}
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+        run: |
+          result=$(jq -c '.[-1] | select(.type == "result")' "$EXECUTION_FILE" 2>/dev/null || true)
+          if [ -z "$result" ]; then
+            echo "No result message in execution file; skipping cost comment."
+            exit 0
+          fi
+
+          cost=$(echo "$result" | jq -r '.total_cost_usd // empty')
+          if [ -z "$cost" ]; then
+            echo "No total_cost_usd in result; skipping cost comment."
+            exit 0
+          fi
+          turns=$(echo "$result" | jq -r '.num_turns // "?"')
+          duration_ms=$(echo "$result" | jq -r '.duration_ms // 0')
+          duration_s=$(awk "BEGIN { printf \"%.1f\", ${duration_ms} / 1000 }")
+          cost_fmt=$(awk "BEGIN { printf \"%.4f\", ${cost} }")
+
+          body=$(printf '%s\n\n%s' \
+            "🧮 **Claude implement cost (approximate):** \$${cost_fmt} USD · ${turns} turns · ${duration_s}s" \
+            "Anthropic's self-reported cost for this automated implementation only. Actual billing may differ slightly, e.g. from prompt-cache discounts.")
+          gh issue comment "${{ github.event.issue.number }}" --body "$body"
