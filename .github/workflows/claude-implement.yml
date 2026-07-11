@@ -82,7 +82,10 @@ jobs:
 
             1. Comment on issue #${{ github.event.issue.number }} (via `gh issue
                comment`) acknowledging that you are starting the implementation
-               now, referencing the triggering comment.
+               now. Link to THIS workflow run so the reader can follow progress —
+               ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+               — do NOT link back to the triggering comment (that points at
+               itself and is useless).
             2. Create and check out a new branch named
                `claude/implement-issue-${{ github.event.issue.number }}` off the
                current branch.
