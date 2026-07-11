@@ -110,6 +110,8 @@ jobs:
             4. Apply the smallest fix that would make the failing check(s) pass.
                Reproduce/verify locally read-only where useful (e.g. `./gradlew
                test`, `./gradlew buildPlugin`). Commit the fix to that branch.
+               Never considering reverting the PR's changes - either fix the issue or update with
+               a comment explaining why you can't and don't open a PR in this case. 
             5. Push the branch to origin.
             6. Open a SEPARATE pull request with `gh pr create` targeting the
                repository's default branch (NOT the original PR's branch).
