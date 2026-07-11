@@ -10,7 +10,7 @@ name: Claude Review Dependabot
 # this repo, plus a CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY) repository
 # secret. See https://github.com/anthropics/claude-code-action#quickstart.
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize]
 
 permissions:
