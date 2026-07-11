@@ -38,6 +38,14 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Pass the workflow's GITHUB_TOKEN explicitly so the action uses it
+          # directly instead of minting a claude[bot] GitHub App token via the
+          # OIDC exchange. That exchange returns "401 Invalid OIDC token" for
+          # pull_request_target runs (the claims differ from a plain
+          # pull_request event), which we're stuck on here because Dependabot
+          # PRs only get secret + write-token access via pull_request_target.
+          # Trade-off: review comments post as github-actions[bot], not claude[bot].
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           allowed_bots: 'dependabot'
           prompt: |
             /caveman
