@@ -95,8 +95,11 @@ jobs:
             The PR head is already checked out. Follow these steps in order:
 
             1. Comment on PR #${{ github.event.issue.number }} (via `gh pr
-               comment`) acknowledging you are starting now, referencing the
-               triggering comment.
+               comment`) acknowledging you are starting now. Link to THIS
+               workflow run so the reader can follow progress —
+               ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+               — do NOT link back to the triggering comment (that points at
+               itself and is useless).
             2. Follow the /gh-fix-ci skill's steps 1-5 to inspect ALL failing
                GitHub Actions checks for this PR (`gh pr checks`), scope out any
                non-Actions checks, and summarize the failure(s). Treat multiple

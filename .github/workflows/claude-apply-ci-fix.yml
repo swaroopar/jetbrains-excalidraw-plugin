@@ -144,8 +144,11 @@ jobs:
             order:
 
             1. Comment on PR #${{ github.event.issue.number }} (via `gh pr
-               comment`) acknowledging that you're starting now, referencing
-               the triggering comment.
+               comment`) acknowledging that you're starting now. Link to THIS
+               workflow run so the reader can follow progress —
+               ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+               — do NOT link back to the triggering comment (that points at
+               itself and is useless).
             2. Find which fixes @${{ github.event.comment.user.login }}
                selected. claude-fix-ci.yml posts each proposed fix as a PR
                review comment containing a \`\`\`suggestion block. The
