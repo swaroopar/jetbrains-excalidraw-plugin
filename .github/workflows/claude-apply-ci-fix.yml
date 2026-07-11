@@ -40,9 +40,23 @@ name: Claude Apply CI Fix
 # Claude only edits files; the plain "Commit and push the applied fix" step
 # below does the actual `git commit`/`git push`, using the minted App token
 # directly. Its git commit author is set to `claude[bot]` (the Claude GitHub
-# App's identity, cosmetic only) for visual consistency with the rest of this
-# CI-fix flow, even though the push itself authenticates as this repo's own
-# separate App installation, not Anthropic's Claude App.
+# App's real account, id 209825114 — verified via `gh api users/claude[bot]`;
+# an earlier version of this workflow copied `41898282+claude[bot]@...` from
+# a claude-code-action commit, but 41898282 actually belongs to
+# `github-actions[bot]`, so it displayed as the wrong bot) for visual
+# consistency with the rest of this CI-fix flow, even though the push itself
+# authenticates as this repo's own separate App installation, not Anthropic's
+# Claude App.
+#
+# Even the GitHub App token push above did NOT get CI to re-run (confirmed on
+# PR #72) — a controlled test showed the same push succeeds and triggers CI
+# fine when run *outside* any Actions job, but not from inside one, for any
+# credential (GITHUB_TOKEN, PAT, or App token alike). So this workflow does
+# not rely on the push alone: after pushing, it explicitly dispatches
+# `workflow_dispatch` runs of Build Plugin and runIde smoke test against the
+# new commit's branch. workflow_dispatch is documented to always create a
+# run regardless of what triggered it, and every use of it in this repo's
+# testing has worked without exception — unlike relying on the push itself.
 #
 # Only works for PRs from this repo (not forks): an installation token can't
 # push to a fork's branch, so for fork PRs Claude will say so and stop rather
@@ -62,7 +76,7 @@ permissions:
   contents: write
   issues: write
   pull-requests: write
-  actions: read
+  actions: write
   id-token: write
 
 jobs:
@@ -208,22 +222,39 @@ jobs:
       # consistency with the rest of this CI-fix flow — see the file-level
       # comment above.
       - name: Commit and push the applied fix
+        id: commit-push
         if: steps.claude.outcome == 'success'
         env:
           APP_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           if git diff --quiet && git diff --cached --quiet; then
             echo "No file changes from Claude — nothing to commit (it likely stopped early, e.g. no suggestion was approved). See its PR comment for why."
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           git config user.name "claude[bot]"
-          git config user.email "41898282+claude[bot]@users.noreply.github.com"
+          git config user.email "209825114+claude[bot]@users.noreply.github.com"
           git remote set-url origin "https://x-access-token:${APP_TOKEN}@github.com/${{ github.repository }}.git"
           git add -A
           git commit -m "Apply approved CI-fix suggestion(s) via @claude apply fix
 
           Requested by @${{ github.event.comment.user.login }}: ${{ github.event.comment.html_url }}"
           git push
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+
+      # The push above does NOT reliably re-trigger pull_request-triggered CI
+      # (confirmed even with a GitHub App token — see the file-level comment).
+      # workflow_dispatch is the one mechanism proven to always create a run
+      # in this repo's testing, so explicitly dispatch both CI workflows
+      # against the branch we just pushed instead of hoping the push does it.
+      - name: Manually trigger CI on the new commit
+        if: steps.commit-push.outputs.pushed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          branch="$(git rev-parse --abbrev-ref HEAD)"
+          gh workflow run "Build Plugin" --ref "$branch"
+          gh workflow run "runIde smoke test" --ref "$branch"
 
       - name: Post Claude cost estimate
         if: always() && steps.claude.outputs.execution_file != ''
