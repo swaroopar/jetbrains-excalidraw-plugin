@@ -1,0 +1,91 @@
+name: Claude Review Dependabot
+
+# Triggered on dependabot pull requests to automatically review dependency
+# changes using the dependency-review skill. Claude:
+#   1. reviews the dependency changes,
+#   2. posts findings as a comment on the PR,
+#   3. posts the approximate Anthropic cost of the review.
+#
+# Requires the Claude GitHub App (https://github.com/apps/claude) installed on
+# this repo, plus a CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY) repository
+# secret. See https://github.com/anthropics/claude-code-action#quickstart.
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+jobs:
+  review:
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Checkout PR head
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr checkout ${{ github.event.pull_request.number }}
+
+      - name: Review with Claude
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            /caveman
+            /dependency-review
+
+            This is a one-shot run. Run every sub-agent in the foreground
+            (run_in_background: false).
+
+            Review dependabot pull request #${{ github.event.pull_request.number }}
+            in ${{ github.repository }}.
+
+            Follow these steps:
+
+            1. Comment on PR #${{ github.event.pull_request.number }} (via
+               `gh pr comment`) acknowledging the review is starting.
+            2. Run the /dependency-review skill to analyze the changes.
+            3. Post the findings as a single comment on the PR (via `gh pr comment`).
+
+            If there are no substantial findings, just acknowledge that the
+            dependencies look good.
+          show_full_output: true
+          claude_args: |
+            --model claude-haiku-4-5-20251001
+            --max-turns 30
+            --allowedTools "Skill,Read,Grep,Glob,Bash"
+
+      - name: Post Claude cost estimate
+        if: always() && steps.claude.outputs.execution_file != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+        run: |
+          result=$(jq -c '.[-1] | select(.type == "result")' "$EXECUTION_FILE" 2>/dev/null || true)
+          if [ -z "$result" ]; then
+            echo "No result message in execution file; skipping cost comment."
+            exit 0
+          fi
+
+          cost=$(echo "$result" | jq -r '.total_cost_usd // empty')
+          if [ -z "$cost" ]; then
+            echo "No total_cost_usd in result; skipping cost comment."
+            exit 0
+          fi
+          turns=$(echo "$result" | jq -r '.num_turns // "?"')
+          duration_ms=$(echo "$result" | jq -r '.duration_ms // 0')
+          duration_s=$(awk "BEGIN { printf \"%.1f\", ${duration_ms} / 1000 }")
+          cost_fmt=$(awk "BEGIN { printf \"%.4f\", ${cost} }")
+
+          body=$(printf '%s\n\n%s' \
+            "🧮 **Claude dependabot review cost (approximate):** \$${cost_fmt} USD · ${turns} turns · ${duration_s}s" \
+            "Anthropic's self-reported cost for this automated review only. Actual billing may differ slightly, e.g. from prompt-cache discounts.")
+          gh pr comment "${{ github.event.pull_request.number }}" --body "$body"
