@@ -68,6 +68,11 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           trigger_phrase: "@claude please review"
           label_trigger: "claude-review-requested"
+          # The implement job posts its "@claude please review" trigger comment
+          # as claude[bot]. Without this, the action's human-actor check rejects
+          # a bot-authored trigger (same reason claude-review-dependabot.yml
+          # sets allowed_bots for dependabot). Human reviewers are unaffected.
+          allowed_bots: "claude"
           prompt: |
             /caveman
             /code-review-skill
