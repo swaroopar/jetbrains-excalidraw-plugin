@@ -129,10 +129,10 @@ jobs:
       - name: Post Claude cost estimate
         if: always() && steps.claude.outputs.execution_file != ''
         env:
-          # Use the Claude App token the action minted (falling back to the
-          # workflow token if it's ever unavailable) so the cost comment posts
-          # as claude[bot], matching Claude's other comments — not github-actions[bot].
-          GH_TOKEN: ${{ steps.claude.outputs.github_token || secrets.GITHUB_TOKEN }}
+          # claude-code-action revokes its minted App token when its step ends,
+          # so steps.claude.outputs.github_token 401s here — this telemetry
+          # comment therefore posts as github-actions[bot] via GITHUB_TOKEN.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
         run: |
           result=$(jq -c '.[-1] | select(.type == "result")' "$EXECUTION_FILE" 2>/dev/null || true)
@@ -154,4 +154,5 @@ jobs:
           body=$(printf '%s\n\n%s' \
             "🧮 **Claude implement cost (approximate):** \$${cost_fmt} USD · ${turns} turns · ${duration_s}s" \
             "Anthropic's self-reported cost for this automated implementation only. Actual billing may differ slightly, e.g. from prompt-cache discounts.")
-          gh issue comment "${{ github.event.issue.number }}" --body "$body"
+          gh issue comment "${{ github.event.issue.number }}" --body "$body" \
+            || echo "Cost comment failed to post; continuing without failing the job."
