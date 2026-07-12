@@ -1,0 +1,153 @@
+name: Release (using Claude)
+
+# Manually-triggered release, identical to the "Release" workflow EXCEPT that the
+# next version number and the changelog are produced by Claude (via the
+# /release-notes skill) instead of the deterministic bash bump logic. Claude reads
+# the commits since the latest release tag, decides the next best semantic version,
+# and writes the release notes. Everything else — tests, build, tag, GitHub Release —
+# is the same as release.yml.
+#
+# Like release.yml, this workflow NEVER pushes to the (protected) main branch: the
+# version is injected into the build via -PpluginVersion and the git tag is the
+# source of truth for the released version.
+#
+# Requires the Claude GitHub App installed on this repo plus a CLAUDE_CODE_OAUTH_TOKEN
+# repository secret (same as the other claude-*.yml workflows).
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write        # push the tag and create the release (NOT the main branch)
+  pull-requests: read    # /release-notes reads PR titles/descriptions via `gh api`
+  id-token: write        # OIDC for claude-code-action
+
+jobs:
+  release-using-claude:
+    name: release-using-claude
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0          # full history for changelog + tag discovery
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      # Regular tests must pass before anything is tagged or released.
+      - name: Run tests
+        run: ./gradlew test --no-configuration-cache
+
+      # Claude replaces the deterministic "Compute next version" + "Generate changelog"
+      # steps: it runs the /release-notes skill, picks the next best semver, and writes
+      # RELEASE_VERSION.txt (bare X.Y.Z) and CHANGELOG.md into the repo root.
+      - name: Generate version and release notes with Claude
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            /caveman
+            /release-notes
+
+            This is a one-shot, non-interactive run: there is no live session to
+            deliver a background-task notification to, so any Agent/Task tool
+            call you make in background mode will never resume. Run every
+            sub-agent in the foreground (run_in_background: false) and wait for
+            its result in-line before continuing.
+
+            You are preparing a new release of ${{ github.repository }} from the
+            current default branch. No human reviews your output before it is
+            published, so be precise and conservative.
+
+            Do the following, in order:
+
+            1. Find the previous released version: the latest `v*` git tag
+               (`git tag --list 'v*' --sort=-v:refname | head -n1`). If there is
+               no such tag, treat this as the initial release and use the
+               `pluginVersionFallback` value from gradle.properties as the
+               current version.
+            2. Run the /release-notes skill over the commits since that tag
+               (`<prev-tag>..HEAD`) to (a) generate the release notes and
+               (b) decide the next best semantic version, following the skill's
+               Semantic Versioning rules: a `BREAKING CHANGE:` -> MAJOR, any
+               `feat:` -> MINOR, only `fix:`/`perf:` (or no conventional
+               commits) -> PATCH. The chosen version MUST be strictly greater
+               than the previous released version.
+            3. Write the chosen version to a file named `RELEASE_VERSION.txt` in
+               the repo root. It must contain ONLY the bare `X.Y.Z` (no leading
+               `v`, no surrounding text, at most one trailing newline) — a later
+               workflow step parses this file verbatim.
+            4. Write the generated release notes to `CHANGELOG.md` in the repo
+               root, starting with a `## v<X.Y.Z>` heading that matches the
+               release title.
+
+            Do NOT create git tags, push anything, build the plugin, or create
+            the GitHub release — later workflow steps handle all of that. Your
+            only job is to write RELEASE_VERSION.txt and CHANGELOG.md.
+          show_full_output: true
+          claude_args: |
+            --model claude-haiku-4-5-20251001
+            --max-turns 75
+            --allowedTools "Skill,Read,Write,Edit,Glob,Grep,Bash"
+
+      # Parse Claude's version output into step outputs, validating the format and
+      # that the tag does not already exist. Fails the job (before any tag/release)
+      # if Claude produced nothing usable.
+      - name: Read computed version
+        id: ver
+        run: |
+          if [ ! -f RELEASE_VERSION.txt ]; then
+            echo "Claude did not produce RELEASE_VERSION.txt" >&2
+            exit 1
+          fi
+          next=$(tr -d '[:space:]' < RELEASE_VERSION.txt)
+          if ! printf '%s' "$next" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Invalid version '$next' in RELEASE_VERSION.txt (expected X.Y.Z)" >&2
+            exit 1
+          fi
+          if git rev-parse "v$next" >/dev/null 2>&1; then
+            echo "Tag v$next already exists; refusing to re-release" >&2
+            exit 1
+          fi
+          if [ ! -s CHANGELOG.md ]; then
+            echo "Claude did not produce a non-empty CHANGELOG.md" >&2
+            exit 1
+          fi
+          prev_tag=$(git tag --list 'v*' --sort=-v:refname | head -n1)
+          {
+            echo "prev_tag=$prev_tag"
+            echo "next=$next"
+            echo "tag=v$next"
+          } >> "$GITHUB_OUTPUT"
+          echo "Releasing -> ${next} (tag v${next}, prev ${prev_tag:-none})"
+          echo "----- CHANGELOG.md -----"; cat CHANGELOG.md
+
+      - name: Build plugin
+        # Inject the version via -P so no version-bump commit is pushed to main; the tag
+        # is the source of truth. Locally (no -P) build.gradle.kts derives the next-patch
+        # -SNAPSHOT from the latest tag; pluginVersionFallback is only the no-git fallback.
+        run: ./gradlew buildPlugin -PpluginVersion=${{ steps.ver.outputs.next }} --no-configuration-cache
+
+      - name: Create tag
+        run: |
+          git config user.name "Swaroop AR"
+          git config user.email "swaroop.ar@outlook.com"
+          git tag -a "${{ steps.ver.outputs.tag }}" -m "Release ${{ steps.ver.outputs.tag }}"
+          git push origin "${{ steps.ver.outputs.tag }}"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.ver.outputs.tag }}" \
+            build/distributions/*.zip \
+            CHANGELOG.md \
+            --title "${{ steps.ver.outputs.tag }}" \
+            --notes-file CHANGELOG.md
