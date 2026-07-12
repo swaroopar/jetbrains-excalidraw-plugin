@@ -99,7 +99,14 @@ jobs:
                c. A "## Testing" section summarizing what you ran to verify it and
                   the results.
                d. `Closes #${{ github.event.issue.number }}`.
-            6. Comment on issue #${{ github.event.issue.number }} with the
+            6. If — and only if — the pull request opened successfully, post a
+               comment on THAT pull request (via `gh pr comment <pr-number>`)
+               whose body is exactly `@claude please review` — one single space
+               between "@claude" and "please", since the review workflow
+               triggers on that exact phrase. This automatically kicks off a
+               code review of the new PR. Skip this entirely if no PR was
+               opened.
+            7. Comment on issue #${{ github.event.issue.number }} with the
                outcome — always leave a comment, never end on a raw error:
                - If the PR opened: a short note with its number (e.g. `#123`,
                  which GitHub auto-links to the PR — do NOT also paste the full
