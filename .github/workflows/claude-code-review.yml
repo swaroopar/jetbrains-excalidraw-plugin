@@ -64,7 +64,7 @@ jobs:
           prompt: |
             /caveman
             /code-review-skill
-
+            /pr-review-comments
             This is a one-shot, non-interactive run: there is no live session to
             deliver a background-task notification to, so any Agent/Task tool
             call you make in background mode will never resume. Run every
@@ -88,7 +88,8 @@ jobs:
                --json baseRefName -q .baseRefName`).
             3. Run the /code-review-skill skill using that base branch as the fixed
                point.
-            4. Post the aggregated Standards and Spec findings as a single
+            4. Write inline comments first using the pr-review-comments skill.
+            5. If any aggregated comment is required, then post the aggregated Standards and Spec findings as a single
                comment on PR #${{ github.event.pull_request.number || github.event.issue.number }}
                (via `gh pr comment`), using the "## Standards" / "## Spec"
                headings and closing summary line from the skill's own report

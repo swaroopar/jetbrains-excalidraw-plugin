@@ -1,19 +1,5 @@
 name: Claude Implement Issue
 
-# Triggered by a comment on an ISSUE (not a PR) containing the trigger phrase
-# "@claude implement this". Claude then:
-#   1. acknowledges on the issue that it's starting,
-#   2. branches, implements the issue using /caveman + the /implement skill, and commits,
-#   3. opens a PR (not just a "create PR" link — see prompt below) whose body
-#      acknowledges when work started and summarizes what changed,
-#   4. comments back on the issue with the PR link.
-#
-# Requires the Claude GitHub App (https://github.com/apps/claude) installed on
-# this repo, plus an ANTHROPIC_API_KEY (or CLAUDE_CODE_OAUTH_TOKEN) repository
-# secret. See https://github.com/anthropics/claude-code-action#quickstart.
-#
-# Only users with write access to the repo can trigger this action (enforced
-# by claude-code-action itself) — see its docs/security.md.
 on:
   issue_comment:
     types: [created]
@@ -26,9 +12,6 @@ permissions:
 
 jobs:
   implement:
-    # issue_comment fires for comments on PRs too (a PR is an "issue" under the
-    # hood); github.event.issue.pull_request is only set for those, so this
-    # excludes them and keeps the trigger issue-only.
     if: |
       github.event.issue.pull_request == null &&
       contains(github.event.comment.body, '@claude implement this')
