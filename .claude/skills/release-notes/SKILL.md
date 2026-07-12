@@ -1,7 +1,6 @@
 ---
 name: release-notes
 description: Generate release notes in multiple formats from git commits. Use when preparing a release and need notes in multiple formats.
-disable-model-invocation: true
 ---
 
 # Release Notes Generator
