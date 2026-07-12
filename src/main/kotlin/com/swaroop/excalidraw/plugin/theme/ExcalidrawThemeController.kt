@@ -89,8 +89,7 @@ class ExcalidrawThemeController(
      * No-op after [dispose].
      */
     fun pushCurrentTheme() {
-        if (disposed) return
-        bridge.sendThemeUpdate(themeProvider())
+        pushTheme()
         ready = true
     }
 
@@ -99,7 +98,19 @@ class ExcalidrawThemeController(
      * No-op before [pushCurrentTheme] is called (ready-guard) or after [dispose].
      */
     private fun onThemeChanged() {
-        if (disposed || !ready) return
+        if (!ready) return
+        pushTheme()
+    }
+
+    /**
+     * Pushes the current theme to the bridge if the controller is not disposed.
+     *
+     * This helper eliminates duplication between [pushCurrentTheme] and
+     * [onThemeChanged], both of which need to perform the same disposed-check
+     * and bridge-update sequence.
+     */
+    private fun pushTheme() {
+        if (disposed) return
         bridge.sendThemeUpdate(themeProvider())
     }
 
