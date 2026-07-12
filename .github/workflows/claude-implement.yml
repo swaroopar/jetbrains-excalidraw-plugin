@@ -101,7 +101,9 @@ jobs:
                d. `Closes #${{ github.event.issue.number }}`.
             6. Comment on issue #${{ github.event.issue.number }} with the
                outcome — always leave a comment, never end on a raw error:
-               - If the PR opened: a short note with its number and link.
+               - If the PR opened: a short note with its number (e.g. `#123`,
+                 which GitHub auto-links to the PR — do NOT also paste the full
+                 URL, to avoid a duplicate link to the same PR).
                - If the branch pushed but `gh pr create` failed (e.g. a
                  permissions error): give the pushed branch name
                  (`claude/implement-issue-${{ github.event.issue.number }}`) and
