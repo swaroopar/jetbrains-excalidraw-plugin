@@ -56,6 +56,13 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Comment with review job link
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment "${{ env.PR_NUMBER }}" \
+            --body "🔍 Claude Dependabot review started — follow progress at ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
       - name: Review with Claude
         id: claude
         uses: anthropics/claude-code-action@v1
@@ -87,16 +94,17 @@ jobs:
               - `gh pr diff ${{ env.PR_NUMBER }}` — the exact
                 manifest/lockfile changes (which versions move).
 
+            A prior workflow step has already posted a comment on the PR linking
+            to this run — do NOT post another "starting" comment.
+
             Follow these steps:
 
-            1. Comment on PR #${{ env.PR_NUMBER }} (via
-               `gh pr comment`) acknowledging the review is starting.
-            2. Run the /dependency-review skill to assess the bump: what package
+            1. Run the /dependency-review skill to assess the bump: what package
                moved from which version to which, what changed between them
                (breaking changes, notable fixes, CVEs), and whether our own
                source ON THE CHECKED-OUT MAIN uses the affected APIs (grep the
                tree) — i.e. the real impact on this project.
-            3. Post the findings as a single comment on the PR (via `gh pr comment`).
+            2. Post the findings as a single comment on the PR (via `gh pr comment`).
 
             If there are no substantial findings, just acknowledge that the
             dependencies look good.
@@ -109,10 +117,10 @@ jobs:
       - name: Post Claude cost estimate
         if: always() && steps.claude.outputs.execution_file != ''
         env:
-          # Use the Claude App token the action minted (falling back to the
-          # workflow token if it's ever unavailable) so the cost comment posts
-          # as claude[bot], matching the review comment — not github-actions[bot].
-          GH_TOKEN: ${{ steps.claude.outputs.github_token || secrets.GITHUB_TOKEN }}
+          # claude-code-action revokes its minted App token when its step ends,
+          # so steps.claude.outputs.github_token 401s here — this telemetry
+          # comment therefore posts as github-actions[bot] via GITHUB_TOKEN.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
         run: |
           result=$(jq -c '.[-1] | select(.type == "result")' "$EXECUTION_FILE" 2>/dev/null || true)
@@ -134,4 +142,5 @@ jobs:
           body=$(printf '%s\n\n%s' \
             "🧮 **Claude dependabot review cost (approximate):** \$${cost_fmt} USD · ${turns} turns · ${duration_s}s" \
             "Anthropic's self-reported cost for this automated review only. Actual billing may differ slightly, e.g. from prompt-cache discounts.")
-          gh pr comment "${{ env.PR_NUMBER }}" --body "$body"
+          gh pr comment "${{ env.PR_NUMBER }}" --body "$body" \
+            || echo "Cost comment failed to post; continuing without failing the job."

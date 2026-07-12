@@ -102,6 +102,13 @@ jobs:
           gh api repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
             -f content=eyes
 
+      - name: Comment with apply-fix job link
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment ${{ github.event.issue.number }} \
+            --body "🔧 Claude apply-fix started — follow progress at ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
       - name: Checkout PR branch
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -140,16 +147,11 @@ jobs:
             You are already on the PR's own branch (checked out by this
             job) — NOT a new branch. This job pushes with a GitHub App
             installation token, not the automatic GITHUB_TOKEN, so a push
-            here re-runs the PR's CI automatically. Follow these steps in
-            order:
+            here re-runs the PR's CI automatically. A prior workflow step has
+            already posted a comment on the PR linking to this run — do NOT post
+            another "starting" comment. Follow these steps in order:
 
-            1. Comment on PR #${{ github.event.issue.number }} (via `gh pr
-               comment`) acknowledging that you're starting now. Link to THIS
-               workflow run so the reader can follow progress —
-               ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-               — do NOT link back to the triggering comment (that points at
-               itself and is useless).
-            2. Find which fixes @${{ github.event.comment.user.login }}
+            1. Find which fixes @${{ github.event.comment.user.login }}
                selected. claude-fix-ci.yml posts each proposed fix as a PR
                review comment containing a \`\`\`suggestion block. The
                approver picks the ones they want by reacting 👍 to those
@@ -162,12 +164,12 @@ jobs:
                @${{ github.event.comment.user.login }} is among its 👍 (+1)
                reactors. Only consider suggestion comments from this repo's
                CI-fix automation — ignore unrelated review threads.
-            3. If NO suggestion carries the approver's 👍, do not guess or
+            2. If NO suggestion carries the approver's 👍, do not guess or
                invent a fix: post a `gh pr comment` asking them to react 👍 to
                the specific suggestion(s) they want and then re-comment
                "@claude apply fix", and stop. Likewise, if the checks those
                suggestions targeted are already green, say so and stop.
-            4. Apply ONLY the approved suggestions, exactly as written —
+            3. Apply ONLY the approved suggestions, exactly as written —
                verbatim. Do NOT re-derive, combine, reformat, or "improve"
                them; the approver reviewed that exact text. Apply each
                suggestion's replacement to the current content of its file
@@ -179,14 +181,14 @@ jobs:
                build/test (e.g. `./gradlew test`) as a courtesy, but CI is the
                authority — never alter an approved suggestion just to make a
                local build pass; note any concern in your summary instead.
-            5. Do NOT run `git add`, `git commit`, `git push`, or any other
+            4. Do NOT run `git add`, `git commit`, `git push`, or any other
                git write command yourself. Leave the applied change(s) as
                uncommitted edits in the working tree — a later step in this
                same job commits and pushes them for you (using a token
                confirmed to reliably re-trigger CI, unlike git operations run
                from inside this action). Do NOT create a new branch and do
                NOT open a new pull request.
-            6. Comment on PR #${{ github.event.issue.number }} (via `gh pr
+            5. Comment on PR #${{ github.event.issue.number }} (via `gh pr
                comment`) summarizing exactly which suggestions you applied,
                noting that this job will commit and push them automatically
                right after you finish, which will re-run CI.
@@ -231,12 +233,10 @@ jobs:
       - name: Post Claude cost estimate
         if: always() && steps.claude.outputs.execution_file != ''
         env:
-          # Use the App token the action used (falling back to the workflow
-          # token if it's ever unavailable) so the cost comment posts as the
-          # same CI-app identity as this workflow's other comments — not
-          # github-actions[bot]. (This workflow passes the custom CI_APP token
-          # to re-trigger CI on push, so this is that app, not claude[bot].)
-          GH_TOKEN: ${{ steps.claude.outputs.github_token || secrets.GITHUB_TOKEN }}
+          # Deterministic telemetry comment — posts as github-actions[bot] via
+          # GITHUB_TOKEN, consistent with the cost comments in the other
+          # workflows. (Claude's own comments in this job use the CI-App token.)
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
         run: |
           result=$(jq -c '.[-1] | select(.type == "result")' "$EXECUTION_FILE" 2>/dev/null || true)
@@ -258,4 +258,5 @@ jobs:
           body=$(printf '%s\n\n%s' \
             "🧮 **Claude CI-fix cost (approximate):** \$${cost_fmt} USD · ${turns} turns · ${duration_s}s" \
             "Anthropic's self-reported cost for this automated apply-fix run only (not the whole PR's Claude usage). Actual billing may differ slightly, e.g. from prompt-cache discounts.")
-          gh pr comment "${{ github.event.issue.number }}" --body "$body"
+          gh pr comment "${{ github.event.issue.number }}" --body "$body" \
+            || echo "Cost comment failed to post; continuing without failing the job."

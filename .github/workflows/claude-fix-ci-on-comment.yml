@@ -69,6 +69,13 @@ jobs:
           gh api repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
             -f content=eyes
 
+      - name: Comment with fix-ci job link
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment ${{ github.event.issue.number }} \
+            --body "🔧 Claude CI-fix started — follow progress at ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
       - name: Diagnose CI and open a fix PR with Claude
         id: claude
         uses: anthropics/claude-code-action@v1
@@ -92,27 +99,23 @@ jobs:
             ${{ github.repository }} via this comment:
             ${{ github.event.comment.html_url }}
 
-            The PR head is already checked out. Follow these steps in order:
+            The PR head is already checked out. A prior workflow step has
+            already posted a comment on the PR linking to this run — do NOT post
+            another "starting" comment. Follow these steps in order:
 
-            1. Comment on PR #${{ github.event.issue.number }} (via `gh pr
-               comment`) acknowledging you are starting now. Link to THIS
-               workflow run so the reader can follow progress —
-               ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-               — do NOT link back to the triggering comment (that points at
-               itself and is useless).
-            2. Follow the /gh-fix-ci skill's steps 1-5 to inspect ALL failing
+            1. Follow the /gh-fix-ci skill's steps 1-5 to inspect ALL failing
                GitHub Actions checks for this PR (`gh pr checks`), scope out any
                non-Actions checks, and summarize the failure(s). Treat multiple
                checks failing from one root cause as a single fix.
-            3. Create and check out a new branch named
+            2. Create and check out a new branch named
                `claude/fix-ci-pr-${{ github.event.issue.number }}` off the
                currently checked-out PR head.
-            4. Apply the smallest fix that would make the failing check(s) pass.
+            3. Apply the smallest fix that would make the failing check(s) pass.
                Reproduce/verify locally read-only where useful (e.g. `./gradlew
                test`, `./gradlew buildPlugin`). Commit the fix to that branch.
                Never considering reverting the PR's changes - either fix the issue or update with
                a comment explaining why you can't and don't open a PR in this case. 
-            5. Push the branch to origin. This push may be REJECTED for a
+            4. Push the branch to origin. This push may be REJECTED for a
                permissions reason even though your fix is legitimate — most
                commonly GitHub's "refusing to allow a GitHub App to create or
                update workflow `.github/workflows/...` without workflows
@@ -121,8 +124,8 @@ jobs:
                branch (the push token here lacks the `workflows` permission). If
                the push is rejected for such a reason, do NOT keep retrying and
                do NOT try to alter or delete workflow files to get around it —
-               skip straight to step 7 and report it.
-            6. If the push succeeded, open a SEPARATE pull request with `gh pr
+               skip straight to step 6 and report it.
+            5. If the push succeeded, open a SEPARATE pull request with `gh pr
                create` targeting the repository's default branch (NOT the
                original PR's branch). Because it is branched off the PR head, it
                carries that PR's changes plus your fix. The PR body must include,
@@ -134,7 +137,7 @@ jobs:
                   root cause.
                c. A "## Fix" section summarizing the change and the files touched.
                d. A "## Testing" section summarizing what you ran and the results.
-            7. Comment on PR #${{ github.event.issue.number }} with the outcome —
+            6. Comment on PR #${{ github.event.issue.number }} with the outcome —
                always leave a comment, never end on a raw error:
                - If the fix PR opened: a short note linking it (number and URL)
                  and saying it supersedes this PR once merged.

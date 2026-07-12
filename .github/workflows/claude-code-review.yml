@@ -55,16 +55,24 @@ jobs:
           gh api repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
             -f content=eyes
 
+      - name: Comment with review job link
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment ${{ github.event.pull_request.number || github.event.issue.number }} \
+            --body "🔍 Claude Code review started — follow progress at ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
       - name: Review PR with Claude
+        id: claude
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           trigger_phrase: "@claude please review"
           label_trigger: "claude-review-requested"
           # The implement job posts its "@claude please review" trigger comment
-          # as claude[bot]. Without this, the action's human-actor check rejects
-          # a bot-authored trigger (same reason claude-review-dependabot.yml
-          # sets allowed_bots for dependabot). Human reviewers are unaffected.
+          # as claude[bot]; without this the action's human-actor check rejects
+          # a bot-authored trigger (same as claude-review-dependabot.yml). Human
+          # reviewers are unaffected.
           allowed_bots: "claude"
           prompt: |
             /caveman
@@ -85,19 +93,13 @@ jobs:
 
             Follow these steps in order:
 
-            1. Comment on PR #${{ github.event.pull_request.number || github.event.issue.number }}
-               (via `gh pr comment`) acknowledging that the review is starting
-               now. Link to THIS workflow run so the reader can follow progress —
-               ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-               — do NOT link back to the triggering comment (that points at
-               itself and is useless).
-            2. Determine the PR's base branch (`gh pr view
+            1. Determine the PR's base branch (`gh pr view
                ${{ github.event.pull_request.number || github.event.issue.number }}
                --json baseRefName -q .baseRefName`).
-            3. Run the /code-review-skill skill using that base branch as the fixed
+            2. Run the /code-review-skill skill using that base branch as the fixed
                point.
-            4. Write inline comments first using the pr-review-comments skill.
-            5. If any aggregated comment is required, then post the aggregated Standards and Spec findings as a single
+            3. Write inline comments first using the pr-review-comments skill.
+            4. If any aggregated comment is required, then post the aggregated Standards and Spec findings as a single
                comment on PR #${{ github.event.pull_request.number || github.event.issue.number }}
                (via `gh pr comment`), using the "## Standards" / "## Spec"
                headings and closing summary line from the skill's own report
@@ -111,3 +113,34 @@ jobs:
             --model claude-haiku-4-5-20251001
             --max-turns 75
             --allowedTools "Skill,Read,Grep,Glob,Bash"
+
+      - name: Post Claude cost estimate
+        if: always() && steps.claude.outputs.execution_file != ''
+        env:
+          # claude-code-action revokes its minted App token when its step ends,
+          # so steps.claude.outputs.github_token 401s here — this telemetry
+          # comment therefore posts as github-actions[bot] via GITHUB_TOKEN.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+        run: |
+          result=$(jq -c '.[-1] | select(.type == "result")' "$EXECUTION_FILE" 2>/dev/null || true)
+          if [ -z "$result" ]; then
+            echo "No result message in execution file; skipping cost comment."
+            exit 0
+          fi
+
+          cost=$(echo "$result" | jq -r '.total_cost_usd // empty')
+          if [ -z "$cost" ]; then
+            echo "No total_cost_usd in result; skipping cost comment."
+            exit 0
+          fi
+          turns=$(echo "$result" | jq -r '.num_turns // "?"')
+          duration_ms=$(echo "$result" | jq -r '.duration_ms // 0')
+          duration_s=$(awk "BEGIN { printf \"%.1f\", ${duration_ms} / 1000 }")
+          cost_fmt=$(awk "BEGIN { printf \"%.4f\", ${cost} }")
+
+          body=$(printf '%s\n\n%s' \
+            "🧮 **Claude code-review cost (approximate):** \$${cost_fmt} USD · ${turns} turns · ${duration_s}s" \
+            "Anthropic's self-reported cost for this automated review only. Actual billing may differ slightly, e.g. from prompt-cache discounts.")
+          gh pr comment "${{ github.event.pull_request.number || github.event.issue.number }}" --body "$body" \
+            || echo "Cost comment failed to post; continuing without failing the job."
