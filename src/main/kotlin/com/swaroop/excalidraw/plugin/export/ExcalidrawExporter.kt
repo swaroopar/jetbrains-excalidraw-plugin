@@ -1,7 +1,6 @@
 package com.swaroop.excalidraw.plugin.export
 
 import com.intellij.openapi.diagnostic.Logger
-import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import com.swaroop.excalidraw.plugin.bridge.ExcalidrawJsBridge
 
@@ -79,14 +78,12 @@ class ExcalidrawExporter private constructor(
      *
      * @param format    The export format: `"svg"` or `"png"`.
      * @param scale     The device-pixel scale factor (relevant for PNG).
-     * @param project   The IDE [Project] context (may be null in test scenarios).
      * @param bridge    The live [ExcalidrawJsBridge] to communicate with the web app.
      * @param targetFile The destination [VirtualFile]; if null the call is a no-op.
      */
     fun exportDrawing(
         format: String,
         scale: Double,
-        project: Project?,
         bridge: ExcalidrawJsBridge,
         targetFile: VirtualFile?
     ) {
