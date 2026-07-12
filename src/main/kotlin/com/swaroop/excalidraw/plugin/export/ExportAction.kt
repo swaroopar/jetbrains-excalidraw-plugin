@@ -95,7 +95,6 @@ internal fun performExportAction(
     ExcalidrawExporter.create().exportDrawing(
         format = format,
         scale = 1.0,
-        project = project,
         bridge = editor.bridge,
         targetFile = targetFile
     )

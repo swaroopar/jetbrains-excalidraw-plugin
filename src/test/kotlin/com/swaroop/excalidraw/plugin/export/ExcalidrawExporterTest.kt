@@ -82,7 +82,6 @@ class ExcalidrawExporterTest {
         exporter.exportDrawing(
             format = "svg",
             scale = 1.0,
-            project = null,
             bridge = bridge,
             targetFile = targetFile
         )
@@ -129,7 +128,6 @@ class ExcalidrawExporterTest {
         exporter.exportDrawing(
             format = "png",
             scale = 1.0,
-            project = null,
             bridge = bridge,
             targetFile = targetFile
         )
@@ -172,7 +170,6 @@ class ExcalidrawExporterTest {
         exporter.exportDrawing(
             format = "svg",
             scale = 1.0,
-            project = null,
             bridge = bridge,
             targetFile = null
         )
@@ -205,7 +202,6 @@ class ExcalidrawExporterTest {
         exporter.exportDrawing(
             format = "svg",
             scale = 2.0,
-            project = null,
             bridge = bridge,
             targetFile = targetFile
         )
