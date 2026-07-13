@@ -54,7 +54,7 @@ jobs:
           prompt: |
             /caveman
             /implement
-
+            /java-junit
             This is a one-shot, non-interactive run: there is no live session to
             deliver a background-task notification to, so any Agent/Task tool
             call you make in the background mode will never resume. Run every
