@@ -1,0 +1,302 @@
+name: Claude Code Review Fix
+
+# Triggered by a comment on a PR containing the trigger phrase
+# "@claude handle review comments". This is the "apply the review feedback"
+# counterpart to claude-code-review.yml: that workflow POSTS inline review
+# comments; this one goes through every UNRESOLVED review thread on the PR,
+# fixes the valid ones, and pushes the fixes back to the SAME PR branch so CI
+# re-runs. Claude then:
+#   1. (deterministic step) reacts 👀 to the trigger comment and posts a
+#      "started — here's the run link" comment,
+#   2. reads all unresolved review threads (GraphQL), fixes each valid,
+#      actionable one as uncommitted edits, and — for any comment it judges
+#      invalid / out-of-scope / already-addressed — replies on that thread
+#      explaining why it did NOT change anything,
+#   3. records the node IDs of the threads it actually fixed to a temp file and
+#      posts a summary comment,
+#   4. (deterministic step) commits + pushes those edits to the PR's own branch,
+#   5. (deterministic step) marks exactly the recorded threads resolved, but
+#      ONLY after the push succeeded, so a thread is never shown resolved
+#      without its fix actually landing on the branch,
+#   6. (deterministic step) posts the approximate Claude cost.
+#
+# issue_comment fires for comments on plain issues too; github.event.issue.pull_request
+# is only set for PR comments, so the gate below keeps this PR-only. Only users
+# with write access can trigger (enforced by claude-code-action).
+#
+# Why a minted GitHub App token instead of GITHUB_TOKEN (same rationale as
+# claude-apply-ci-fix.yml): a push authenticated as the automatic GITHUB_TOKEN
+# is silently dropped by GitHub's anti-recursion protection and the PR's CI
+# never re-runs. This job mints an installation access token at runtime from the
+# CI_APP_ID / CI_APP_PRIVATE_KEY secrets (a small GitHub App installed on this
+# repo only, with Contents: read/write + Pull requests: read/write) via
+# actions/create-github-app-token, and uses it for the push AND for every gh/API
+# call Claude makes (so reading threads, replying, and resolving all run under a
+# token that can write PR review threads).
+#
+# Claude itself never runs git commit/git push here (again per claude-apply-ci-fix.yml):
+# a push performed by the action does not reliably re-trigger CI. Claude only
+# edits files + posts its substantive comments; the deterministic "Commit and
+# push" step below does the actual git work with the minted App token, its
+# commit author set to claude[bot] (cosmetic) for visual consistency.
+#
+# Only works for PRs from this repo (not forks): an installation token can't push
+# to a fork's branch, so for fork PRs Claude will say so and stop.
+#
+# Requires the Claude GitHub App (https://github.com/apps/claude) installed on
+# this repo, plus a CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY) repository
+# secret, and the CI_APP_ID / CI_APP_PRIVATE_KEY secrets described above.
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  id-token: write
+
+jobs:
+  review-fix:
+    # issue_comment fires for comments on plain issues too; pull_request is only
+    # set for PR comments, so this keeps the trigger PR-only.
+    if: |
+      github.event.issue.pull_request != null &&
+      contains(github.event.comment.body, '@claude handle review comments')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mint a GitHub App installation token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.CI_APP_ID }}
+          private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
+
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          # Use the minted App token (not GITHUB_TOKEN) so the resulting push is
+          # NOT dropped by GitHub's anti-recursion protection and CI re-runs.
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: React to triggering comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
+            -f content=eyes
+
+      - name: Comment with review-fix job link
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment ${{ github.event.issue.number }} \
+            --body "🩹 Claude review-comment fix started — follow progress at ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      - name: Checkout PR branch
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: gh pr checkout ${{ github.event.issue.number }}
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Address unresolved review comments with Claude
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Use the minted App token (not the ambient GITHUB_TOKEN) for every
+          # gh/API call Claude makes here — reading review threads, replying to
+          # invalid ones, etc. The push and the thread-resolution happen in later
+          # deterministic steps (see the file-level comment above).
+          github_token: ${{ steps.app-token.outputs.token }}
+          trigger_phrase: "@claude handle review comments"
+          prompt: |
+            /caveman
+
+            This is a one-shot, non-interactive run: there is no live session to
+            deliver a background-task notification to, so any Agent/Task tool
+            call you make in background mode will never resume. Run every
+            sub-agent in the foreground (run_in_background: false) and wait for
+            its result in-line before continuing.
+
+            @${{ github.event.comment.user.login }} asked you to handle the open
+            review comments on pull request #${{ github.event.issue.number }} in
+            ${{ github.repository }} via this comment:
+            ${{ github.event.comment.html_url }}
+
+            You are already on the PR's own branch (checked out by this job) —
+            NOT a new branch. This job pushes with a GitHub App installation
+            token, not the automatic GITHUB_TOKEN, so a push here re-runs the
+            PR's CI automatically. A prior workflow step has already reacted to
+            the comment and posted a "starting" comment linking this run — do NOT
+            post another "starting" comment. Follow these steps in order:
+
+            1. Fork check. Run:
+                 gh pr view ${{ github.event.issue.number }} --json isCrossRepository -q .isCrossRepository
+               If it prints `true`, this is a fork PR — the push token can't
+               write to a fork branch. Comment on the PR saying you can't push
+               fixes to a fork branch and stop. Do nothing else.
+
+            2. List every UNRESOLVED review thread on the PR (these are the
+               inline review comments, including ones left by the automated
+               reviewer). Run:
+                 gh api graphql -f query='
+                   query($owner:String!,$repo:String!,$number:Int!){
+                     repository(owner:$owner,name:$repo){
+                       pullRequest(number:$number){
+                         reviewThreads(first:100){
+                           nodes{
+                             id isResolved isOutdated path line
+                             comments(first:50){ nodes{ author{login} body diffHunk } }
+                           }
+                         }
+                       }
+                     }
+                   }' -f owner=${{ github.repository_owner }} \
+                      -f repo=${{ github.event.repository.name }} \
+                      -F number=${{ github.event.issue.number }} \
+                   --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved==false)'
+               Each thread's `id` (looks like `PRRT_...`) is its node ID — you
+               need it later. If there are NO unresolved threads, comment on the
+               PR saying there are no open review comments to handle and stop.
+
+            3. For each unresolved thread, read its comment(s), `path`, `line`,
+               and `diffHunk` to understand what's being asked, then decide:
+               - VALID & actionable → apply the smallest correct code change that
+                 addresses it. Edit files only. Do NOT run git. An `isOutdated`
+                 thread may already be handled by later edits on the branch —
+                 judge from the current file contents.
+               - INVALID / out-of-scope / already-addressed / a question you
+                 can't resolve with a code change / something you disagree with →
+                 do NOT change code. Instead REPLY on that exact thread explaining
+                 clearly and specifically why you did not make a change:
+                   gh api graphql -f query='
+                     mutation($threadId:ID!,$body:String!){
+                       addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$threadId, body:$body}){
+                         comment{ id }
+                       }
+                     }' -f threadId="<THREAD_NODE_ID>" -f body="<your reason>"
+                 Do NOT record these for resolution (a human decides what to do
+                 with them).
+
+            4. Where useful, verify your edits locally read-only (e.g. `./gradlew
+               test`, `./gradlew buildPlugin`). CI is the authority — note any
+               concern in your summary rather than forcing a local pass.
+
+            5. Do NOT run `git add`, `git commit`, `git push`, and do NOT resolve
+               any thread yourself. Leave your fixes as uncommitted edits. Write
+               the node ID of EACH thread you actually fixed (one per line, no
+               other text) to the file:
+                 ${{ runner.temp }}/claude-resolved-threads.txt
+               Create/overwrite that file. A later step commits + pushes your
+               edits and then marks exactly those threads resolved — but only
+               after the push succeeds, so a thread is never shown resolved
+               without its fix landing on the branch. If you fixed nothing, write
+               an empty file (or don't create it).
+
+            6. Post ONE summary comment on the PR (via `gh pr comment
+               ${{ github.event.issue.number }}`) listing: which threads you
+               fixed and how (file + one-line summary each), and which you replied
+               to as not-fixed and why. Note that the fixes will be committed,
+               pushed, and their threads marked resolved automatically by this job
+               right after you finish, which re-runs CI.
+
+            If you get blocked partway, still post a summary comment explaining
+            what you did and what's blocking you — never end on a raw error.
+          show_full_output: true
+          claude_args: |
+            --model claude-opus-4-8
+            --max-turns 75
+            --allowedTools "Skill,Read,Edit,MultiEdit,Write,Glob,Grep,Bash"
+
+      # Does the actual commit/push instead of Claude (see the file-level comment
+      # above for why) — re-embeds the minted App token in the remote URL so this
+      # push is unambiguously not GITHUB_TOKEN-authenticated. Commit author is set
+      # to claude[bot] purely for display consistency. Sets pushed=true only after
+      # a real push, so the resolve step below can gate on it.
+      - name: Commit and push the review-comment fixes
+        id: push
+        if: steps.claude.outcome == 'success'
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "No file changes from Claude — nothing to commit (it likely fixed nothing, e.g. every comment was replied to as not-actionable). See its PR comment."
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git config user.name "claude[bot]"
+          git config user.email "41898282+claude[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${APP_TOKEN}@github.com/${{ github.repository }}.git"
+          git add -A
+          git commit -m "Address PR review comments via @claude handle review comments
+
+          Requested by @${{ github.event.comment.user.login }}: ${{ github.event.comment.html_url }}"
+          # Mark pushed before the push; if the push itself fails the step fails
+          # and the resolve step (implicitly gated on this step succeeding) is
+          # skipped, so threads are never resolved without their fix landing.
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+          git push
+
+      # Marks exactly the threads Claude fixed as resolved — only reached when the
+      # push above succeeded, so a resolved thread always has its fix on the
+      # branch. Uses the minted App token (Pull requests: write). Non-fatal.
+      - name: Resolve the fixed review threads
+        if: steps.push.outputs.pushed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          RESOLVED_FILE: ${{ runner.temp }}/claude-resolved-threads.txt
+        run: |
+          if [ ! -s "$RESOLVED_FILE" ]; then
+            echo "No thread IDs recorded to resolve."
+            exit 0
+          fi
+          while IFS= read -r tid; do
+            [ -z "$tid" ] && continue
+            echo "Resolving thread $tid"
+            gh api graphql -f query='
+              mutation($id:ID!){
+                resolveReviewThread(input:{threadId:$id}){ thread{ id isResolved } }
+              }' -f id="$tid" \
+              || echo "Failed to resolve thread $tid (continuing)."
+          done < "$RESOLVED_FILE"
+
+      - name: Post Claude cost estimate
+        if: always() && steps.claude.outputs.execution_file != ''
+        env:
+          # Deterministic telemetry comment — posts as github-actions[bot] via
+          # GITHUB_TOKEN, consistent with the cost comments in the other
+          # workflows. (Claude's own comments in this job use the CI-App token.)
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+        run: |
+          result=$(jq -c '.[-1] | select(.type == "result")' "$EXECUTION_FILE" 2>/dev/null || true)
+          if [ -z "$result" ]; then
+            echo "No result message in execution file; skipping cost comment."
+            exit 0
+          fi
+
+          cost=$(echo "$result" | jq -r '.total_cost_usd // empty')
+          if [ -z "$cost" ]; then
+            echo "No total_cost_usd in result; skipping cost comment."
+            exit 0
+          fi
+          turns=$(echo "$result" | jq -r '.num_turns // "?"')
+          duration_ms=$(echo "$result" | jq -r '.duration_ms // 0')
+          duration_s=$(awk "BEGIN { printf \"%.1f\", ${duration_ms} / 1000 }")
+          cost_fmt=$(awk "BEGIN { printf \"%.4f\", ${cost} }")
+
+          body=$(printf '%s\n\n%s' \
+            "🧮 **Claude review-fix cost (approximate):** \$${cost_fmt} USD · ${turns} turns · ${duration_s}s" \
+            "Anthropic's self-reported cost for this automated review-comment fix run only. Actual billing may differ slightly, e.g. from prompt-cache discounts.")
+          gh pr comment "${{ github.event.issue.number }}" --body "$body" \
+            || echo "Cost comment failed to post; continuing without failing the job."
