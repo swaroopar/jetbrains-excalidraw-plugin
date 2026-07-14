@@ -1,0 +1,101 @@
+{
+  // Dev container for the JetBrains Excalidraw plugin.
+  //
+  // Toolchain (see gradle.properties / build.gradle.kts / excalidraw-bundle/package.json):
+  //   - JDK 17            -> Kotlin/Gradle compile target (javaVersion=17, matches CI temurin 17)
+  //   - Node.js           -> builds the @excalidraw/excalidraw web bundle via webpack (npm ci)
+  //   - Gradle 9.6.1      -> supplied by the committed ./gradlew wrapper, NOT installed here
+  //   - GitHub CLI (gh)   -> used by the repo's Claude Code workflows/skills
+  //   - Claude Code CLI   -> installed by the official anthropics feature so `claude` runs in here
+  //
+  // What works headless in here: `./gradlew test`, `./gradlew buildPlugin`, the npm web-bundle
+  // build, and Claude Code. `./gradlew runIde` launches a real GUI IDE and needs an X server, so
+  // it is NOT expected to work in this headless container without extra display forwarding.
+  "name": "jetbrains-excalidraw-plugin",
+
+  // JDK 17 base (Debian bookworm). Ships git + a JDK 17 the Gradle toolchain picks up directly,
+  // so no toolchain download is needed. Runs as the non-root `vscode` user (passwordless sudo).
+  "image": "mcr.microsoft.com/devcontainers/java:1-17-bookworm",
+
+  "features": {
+    // Node 22 (active LTS). The bundle pins no engine, but React 19 / webpack 5 / babel 8 need 18+.
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "22"
+    },
+    // gh is invoked by the .github Claude workflows and several .claude/skills.
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    // Official Anthropic feature: `npm install -g @anthropic-ai/claude-code` + adds the
+    // anthropic.claude-code VS Code extension. Declares installsAfter node, so it runs
+    // after the node feature above and uses that Node 22 (not its own fallback).
+    "ghcr.io/anthropics/devcontainer-features/claude-code:1": {}
+  },
+
+  // The plugin build downloads the WebStorm SDK and runs Gradle — give it room.
+  "hostRequirements": {
+    "cpus": 4,
+    "memory": "8gb",
+    "storage": "32gb"
+  },
+
+  // Persist Claude Code's config/credentials across rebuilds so you authenticate only once.
+  // (Named volume, not a host bind — keeps host and container state separate.)
+  "mounts": [
+    "source=excalidraw-claude-code-config,target=/home/vscode/.claude,type=volume"
+  ],
+
+  // Pin a locale that Debian always ships (no locale-gen needed). Without this, the
+  // container inherits the host's LANG/LC_* (e.g. en_US.UTF-8), which isn't generated in
+  // the bookworm base image, so man-db's manpath warns "can't set the locale" on login.
+  // C.UTF-8 is UTF-8 capable, so Unicode still works.
+  //
+  // JAVA_HOME: the base image installs JDK 17 via SDKMAN and sets JAVA_HOME only in the
+  // shell init (~/.bashrc), so interactive terminals see it but the JetBrains IDEA backend
+  // process — which is NOT started from a login shell — does not. Without JAVA_HOME the
+  // backend has no JDK for Gradle and reports "Invalid Gradle JDK configuration found".
+  // Promoting it to a container-level env var makes the backend inherit a valid JDK, and
+  // IDEA then resolves the Gradle JVM from it. containerEnv must be a STATIC string (it
+  // can't be computed), so we pin the SDKMAN "current" symlink here; post-create.sh then
+  // guarantees that symlink points at a real JDK (some image builds leave it missing, which
+  // makes Gradle warn "Directory ... used for java installations does not exist").
+  "containerEnv": {
+    "LANG": "C.UTF-8",
+    "LC_ALL": "C.UTF-8",
+    "JAVA_HOME": "/usr/local/sdkman/candidates/java/current"
+  },
+
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+
+  // Each tool reads only its own block: VS Code / the `devcontainer` CLI use `vscode`,
+  // JetBrains Gateway / Remote Dev uses `jetbrains`. They don't cross over.
+  "customizations": {
+    "vscode": {
+      // anthropic.claude-code is contributed by the claude-code feature above, so it's
+      // not repeated here.
+      "extensions": [
+        "fwcd.kotlin",
+        "vscjava.vscode-java-pack",
+        "vscjava.vscode-gradle"
+      ],
+      "settings": {
+        "java.configuration.updateBuildConfiguration": "automatic",
+        "files.exclude": {
+          "**/.gradle": true,
+          "**/build": true,
+          "**/node_modules": true
+        }
+      }
+    },
+    "jetbrains": {
+      // Backend IDE launched inside the container when you open it via JetBrains Gateway
+      // or IDEA's Remote Development -> Dev Containers. This repo is a Kotlin + Gradle
+      // IntelliJ-Platform plugin, so IntelliJ IDEA is the correct backend (WebStorm can't
+      // develop the JVM/Kotlin plugin code). Kotlin and Gradle support are bundled in
+      // IDEA, so no extra plugins are needed to edit/build/test.
+      "backend": "IntelliJ",
+      // Official Anthropic "Claude Code [Beta]" plugin (Marketplace xmlId, NOT the numeric
+      // slug 27310) for in-IDE Claude Code integration. The `claude` CLI also works in
+      // IDEA's built-in terminal via the claude-code feature, so this is a convenience layer.
+      "plugins": ["com.anthropic.code.plugin"]
+    }
+  }
+}
