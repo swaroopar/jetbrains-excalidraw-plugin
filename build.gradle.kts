@@ -124,7 +124,7 @@ dependencies {
 // AD-2: the bundle is loaded by JCEF via a custom excalidraw:// scheme — no remote URL.
 // Uses sh -c so that '&&' is interpreted by the shell on POSIX systems (macOS/Linux).
 // npm ci requires package-lock.json; npm install bootstraps it on first run.
-val buildWebBundle by tasks.registering(Exec::class) {
+val buildWebBundle = tasks.register<Exec>("buildWebBundle") {
     group = "build"
     description = "Install npm deps and build Excalidraw web bundle into src/main/resources/webview/."
     workingDir = file("excalidraw-bundle")
