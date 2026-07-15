@@ -201,7 +201,7 @@ jobs:
             visible in the job's own logs if it fails.
           show_full_output: true
           claude_args: |
-            --model claude-haiku-4-5-20251001
+            --model claude-opus-4-8
             --max-turns 75
             --allowedTools "Skill,Read,Edit,MultiEdit,Write,Glob,Grep,Bash"
 
