@@ -80,13 +80,7 @@ open class ExcalidrawPersistenceService {
      * @param json the canonical `.excalidraw` JSON string to persist.
      */
     open fun writeScene(file: VirtualFile, json: String) {
-        val app = ApplicationManager.getApplication()
-        if (app == null) {
-            // Headless / plain-JUnit context: no Application available.
-            // FileDocumentManager.getInstance() would throw NPE; log and no-op.
-            LOG.warn("writeScene: no Application available for ${file.path} — skipping write")
-            return
-        }
+        val app = requireApplication("writeScene", file.path) ?: return
 
         val document: Document? = FileDocumentManager.getInstance().getDocument(file)
         if (document == null) {
@@ -118,13 +112,7 @@ open class ExcalidrawPersistenceService {
      * @param base64Png the PNG content as a standard Base64-encoded string.
      */
     open fun writePngScene(file: VirtualFile, base64Png: String) {
-        val app = ApplicationManager.getApplication()
-        if (app == null) {
-            // Headless / plain-JUnit context: no Application available.
-            // VFS WriteAction would throw; log and no-op instead.
-            LOG.warn("writePngScene: no Application available for ${file.path} — skipping write")
-            return
-        }
+        val app = requireApplication("writePngScene", file.path) ?: return
         // A03: Base64 decoding of the payload — standard JVM decoder, no execution of content.
         val bytes = java.util.Base64.getDecoder().decode(base64Png)
         // A05: binary write via VFS setBinaryContent inside WriteAction for undo-buffer
@@ -153,6 +141,25 @@ open class ExcalidrawPersistenceService {
     // -------------------------------------------------------------------------
     // Internal helpers
     // -------------------------------------------------------------------------
+
+    /**
+     * Checks whether an Application is available; if not, logs a standardized warning
+     * and returns null to signal callers to skip the write operation.
+     *
+     * Extracted to deduplicate the "no Application available" guard between
+     * [writeScene] and [writePngScene].
+     *
+     * @param methodName the name of the calling method (for the warning message).
+     * @param filePath the path of the file being written (for the warning message).
+     * @return the Application instance, or null if not available (headless / unit-test context).
+     */
+    private fun requireApplication(methodName: String, filePath: String): com.intellij.openapi.application.Application? {
+        val app = ApplicationManager.getApplication()
+        if (app == null) {
+            LOG.warn("$methodName: no Application available for $filePath — skipping write")
+        }
+        return app
+    }
 
     /**
      * Reads raw bytes from [file], using [ReadAction] when an IntelliJ Application
