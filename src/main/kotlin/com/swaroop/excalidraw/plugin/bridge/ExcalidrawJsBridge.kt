@@ -553,7 +553,13 @@ class ExcalidrawJsBridge private constructor(
      * - [BridgeMessage.PngExtracted] → [pngExtractedCallback]
      * - [BridgeMessage.PngExported] → [pngExportedCallback]
      * - [BridgeMessage.LibraryChange] → [libraryChangeCallback] on EDT
-     * - [BridgeMessage.Ready] or null → [readyHandler] with raw JSON
+     * - `null` (unrecognised) → [readyHandler] with raw JSON, logged at WARN
+     *
+     * Note: [BridgeMessage.fromJson] only ever returns the JS→Kotlin subtypes
+     * above or `null` — it never produces [BridgeMessage.Ready] (nor the
+     * Kotlin→JS [BridgeMessage.LoadScene]). In practice only the `null` case
+     * reaches [readyHandler]; the [BridgeMessage.Ready] and `else` branches are
+     * retained defensively for exhaustiveness and future message types.
      *
      * Malformed (null) payloads are logged at WARN level.
      *
@@ -592,6 +598,10 @@ class ExcalidrawJsBridge private constructor(
                     LOG.warn("ExcalidrawJsBridge: unrecognised JS→Kotlin payload (discarded)")
                 }
             }
+            // Defensive fallback: [BridgeMessage.fromJson] never produces the
+            // Kotlin→JS-only subtypes (e.g. [BridgeMessage.LoadScene]), so this
+            // branch is unreachable in practice. It satisfies the compiler's
+            // exhaustiveness check and guards against future message types.
             else -> readyHandler(rawJson)
         }
     }
