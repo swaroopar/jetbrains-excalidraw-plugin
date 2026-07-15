@@ -92,9 +92,9 @@ class ExcalidrawSettingsConfigurable : Configurable {
      *   - EAST: vertical Box with Add and Remove JButtons
      *
      * Button actions:
-     *   - Add: shows JOptionPane input dialog; normalizes the entered extension
-     *     (leading dot, lowercase) and adds it to [listModel] if non-empty and
-     *     not already present.
+     *   - Add: shows JOptionPane input dialog; delegates the entered extension to
+     *     [addToModel], which normalizes it (leading dot, lowercase) and adds it
+     *     to [listModel] if non-empty and not already present.
      *   - Remove: removes all selected indices from [listModel] in reverse order
      *     to keep index positions stable during iteration.
      *
@@ -112,10 +112,7 @@ class ExcalidrawSettingsConfigurable : Configurable {
                 null
             )
             if (!input.isNullOrBlank()) {
-                val normalized = normalizeExtension(input)
-                if (normalized.isNotEmpty() && !listModel.contains(normalized)) {
-                    listModel.addElement(normalized)
-                }
+                addToModel(input)
             }
         }
 
