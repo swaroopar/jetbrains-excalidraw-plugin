@@ -457,9 +457,8 @@ class ExcalidrawJsBridge private constructor(
     }
 
     /**
-     * Dispatches [json] through [BridgeMessage.fromJson] and, if the result is a
-     * [BridgeMessage.SceneChange], invokes [sceneChangeHandler] via
-     * `ApplicationManager.getApplication()?.invokeLater` (AD-05: EDT dispatch).
+     * Simulates receiving a JS→Kotlin message from the Excalidraw app (test-only).
+     * Parses [json] and routes it through [dispatch] (same routing as production).
      *
      * After [dispose], this is a no-op.
      *
@@ -472,26 +471,12 @@ class ExcalidrawJsBridge private constructor(
     internal fun simulateSceneChange(json: String) {
         if (disposed) return
         val message = BridgeMessage.fromJson(json)
-        if (message == null) {
-            LOG.warn("ExcalidrawJsBridge: received unrecognised or malformed scene-change payload (discarded)")
-            return
-        }
-        when (message) {
-            is BridgeMessage.SceneChange -> {
-                ApplicationManager.getApplication()?.invokeLater {
-                    sceneChangeHandler(message.payload)
-                } ?: sceneChangeHandler(message.payload)   // fallback for unit-test context without Application
-            }
-            else -> {
-                LOG.warn("ExcalidrawJsBridge: unexpected message type in scene-change channel: ${message::class.simpleName}")
-            }
-        }
+        dispatch(json, message)
     }
 
     /**
-     * Dispatches [json] through [BridgeMessage.fromJson] and, if the result is a
-     * [BridgeMessage.ExportResult], delivers it to [exportResultCallback] via
-     * [OneShotCallback.deliver] (at-most-once, on the EDT).
+     * Simulates receiving an export result from the Excalidraw app (test-only).
+     * Parses [json] and routes it through [dispatch] (same routing as production).
      *
      * After [dispose], this is a no-op.
      *
@@ -504,24 +489,12 @@ class ExcalidrawJsBridge private constructor(
     internal fun simulateExportResult(json: String) {
         if (disposed) return
         val message = BridgeMessage.fromJson(json)
-        if (message == null) {
-            LOG.warn("ExcalidrawJsBridge: received unrecognised or malformed exportResult payload (discarded)")
-            return
-        }
-        when (message) {
-            is BridgeMessage.ExportResult -> {
-                exportResultCallback.deliver(message.payload)
-            }
-            else -> {
-                LOG.warn("ExcalidrawJsBridge: unexpected message type in exportResult channel: ${message::class.simpleName}")
-            }
-        }
+        dispatch(json, message)
     }
 
     /**
-     * Dispatches [json] through [BridgeMessage.fromJson] and, if the result is a
-     * [BridgeMessage.PngExtracted], delivers it to [pngExtractedCallback] via
-     * [OneShotCallback.deliver] (at-most-once, on the EDT).
+     * Simulates receiving a PNG extraction result from the Excalidraw app (test-only).
+     * Parses [json] and routes it through [dispatch] (same routing as production).
      *
      * After [dispose], this is a no-op.
      *
@@ -533,24 +506,12 @@ class ExcalidrawJsBridge private constructor(
     internal fun simulatePngExtracted(json: String) {
         if (disposed) return
         val message = BridgeMessage.fromJson(json)
-        if (message == null) {
-            LOG.warn("ExcalidrawJsBridge: received unrecognised or malformed pngExtracted payload (discarded)")
-            return
-        }
-        when (message) {
-            is BridgeMessage.PngExtracted -> {
-                pngExtractedCallback.deliver(message)
-            }
-            else -> {
-                LOG.warn("ExcalidrawJsBridge: unexpected message type in pngExtracted channel: ${message::class.simpleName}")
-            }
-        }
+        dispatch(json, message)
     }
 
     /**
-     * Dispatches [json] through [BridgeMessage.fromJson] and, if the result is a
-     * [BridgeMessage.PngExported], delivers it to [pngExportedCallback] via
-     * [OneShotCallback.deliver] (at-most-once, on the EDT).
+     * Simulates receiving a PNG export result from the Excalidraw app (test-only).
+     * Parses [json] and routes it through [dispatch] (same routing as production).
      *
      * After [dispose], this is a no-op.
      *
@@ -562,18 +523,7 @@ class ExcalidrawJsBridge private constructor(
     internal fun simulatePngExported(json: String) {
         if (disposed) return
         val message = BridgeMessage.fromJson(json)
-        if (message == null) {
-            LOG.warn("ExcalidrawJsBridge: received unrecognised or malformed pngExported payload (discarded)")
-            return
-        }
-        when (message) {
-            is BridgeMessage.PngExported -> {
-                pngExportedCallback.deliver(message)
-            }
-            else -> {
-                LOG.warn("ExcalidrawJsBridge: unexpected message type in pngExported channel: ${message::class.simpleName}")
-            }
-        }
+        dispatch(json, message)
     }
 
     /**
@@ -587,6 +537,60 @@ class ExcalidrawJsBridge private constructor(
         pngExtractedCallback.clear()
         pngExportedCallback.clear()
         jsQueryDispose?.invoke()
+    }
+
+    /**
+     * Dispatches a parsed JS→Kotlin message to its handler based on type.
+     * Centralizes all message routing logic so production and test paths
+     * use identical dispatch behavior.
+     *
+     * Routes via [BridgeMessage] type:
+     * - [BridgeMessage.SceneChange] → [sceneChangeHandler] on EDT
+     * - [BridgeMessage.ExportResult] → [exportResultCallback]
+     * - [BridgeMessage.PngExtracted] → [pngExtractedCallback]
+     * - [BridgeMessage.PngExported] → [pngExportedCallback]
+     * - [BridgeMessage.LibraryChange] → [libraryChangeCallback] on EDT
+     * - [BridgeMessage.Ready] or null → [readyHandler] with raw JSON
+     *
+     * Malformed (null) payloads are logged at WARN level.
+     *
+     * @param rawJson The original JSON string (used to pass to [readyHandler]
+     *   for backwards compatibility with the single-handler design).
+     * @param parsed The [BridgeMessage] parsed from [rawJson], or null if
+     *   malformed or unrecognised.
+     */
+    private fun dispatch(rawJson: String, parsed: BridgeMessage?) {
+        when (parsed) {
+            is BridgeMessage.SceneChange -> {
+                ApplicationManager.getApplication()?.invokeLater {
+                    sceneChangeHandler(parsed.payload)
+                } ?: sceneChangeHandler(parsed.payload)   // fallback for unit-test context without Application
+            }
+            is BridgeMessage.ExportResult -> {
+                exportResultCallback.deliver(parsed.payload)
+            }
+            is BridgeMessage.PngExtracted -> {
+                pngExtractedCallback.deliver(parsed)
+            }
+            is BridgeMessage.PngExported -> {
+                pngExportedCallback.deliver(parsed)
+            }
+            is BridgeMessage.LibraryChange -> {
+                val cb = libraryChangeCallback
+                if (cb != null) {
+                    ApplicationManager.getApplication()?.invokeLater {
+                        cb(parsed.libraryItemsJson)
+                    } ?: cb(parsed.libraryItemsJson)   // fallback for unit-test context without Application
+                }
+            }
+            is BridgeMessage.Ready, null -> {
+                readyHandler(rawJson)
+                if (parsed == null) {
+                    LOG.warn("ExcalidrawJsBridge: unrecognised JS→Kotlin payload (discarded)")
+                }
+            }
+            else -> readyHandler(rawJson)
+        }
     }
 
     companion object {
@@ -766,42 +770,7 @@ class ExcalidrawJsBridge private constructor(
             // received string as code — we only parse it via Gson.
             jsQuery.addHandler { message ->
                 val parsed = BridgeMessage.fromJson(message)
-                when (parsed) {
-                    is BridgeMessage.SceneChange -> {
-                        ApplicationManager.getApplication()?.invokeLater {
-                            sceneChangeHandler(parsed.payload)
-                        }
-                    }
-                    is BridgeMessage.ExportResult -> {
-                        // The bridge is captured here via the closure; OneShotCallback
-                        // itself handles the store-once/clear/deliver-on-EDT sequence.
-                        bridge.exportResultCallback.deliver(parsed.payload)
-                    }
-                    is BridgeMessage.PngExtracted -> {
-                        bridge.pngExtractedCallback.deliver(parsed)
-                    }
-                    is BridgeMessage.PngExported -> {
-                        bridge.pngExportedCallback.deliver(parsed)
-                    }
-                    is BridgeMessage.LibraryChange -> {
-                        // Persistent (not one-shot): fired on every library change.
-                        val cb = bridge.libraryChangeCallback
-                        if (cb != null) {
-                            ApplicationManager.getApplication()?.invokeLater {
-                                cb(parsed.libraryItemsJson)
-                            }
-                        }
-                    }
-                    is BridgeMessage.Ready, null -> {
-                        // Treat anything that isn't a typed message as a ready signal
-                        // (backwards-compatible with existing single-handler design).
-                        readyHandler(message)
-                        if (parsed == null) {
-                            LOG.warn("ExcalidrawJsBridge: unrecognised JS→Kotlin payload (discarded)")
-                        }
-                    }
-                    else -> readyHandler(message)
-                }
+                bridge.dispatch(message, parsed)
                 null // null = no synchronous response required
             }
 
