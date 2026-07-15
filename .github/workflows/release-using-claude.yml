@@ -93,7 +93,7 @@ jobs:
             only job is to write RELEASE_VERSION.txt and CHANGELOG.md.
           show_full_output: true
           claude_args: |
-            --model claude-haiku-4-5-20251001
+            --model claude-opus-4-8
             --max-turns 75
             --allowedTools "Skill,Read,Write,Edit,Glob,Grep,Bash"
 
