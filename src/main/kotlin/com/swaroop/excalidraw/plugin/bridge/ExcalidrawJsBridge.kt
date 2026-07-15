@@ -120,14 +120,8 @@ class ExcalidrawJsBridge private constructor(
      *   where the inner payload is a pure JSON string with no executable code.
      */
     fun loadScene(scene: ExcalidrawScene) {
-        if (disposed) return
         val json = BridgeMessage.LoadScene(scene).toJson()
-        // Encode the JSON string as a safe JS string literal (double-quoted,
-        // all inner quotes and backslashes escaped by Gson).  This value is used
-        // as the sole argument to the known window function — no eval.
-        val jsStringLiteral = GSON.toJson(json)          // e.g. "{\"type\":\"loadScene\",...}"
-        val jsCall = "window.__excalidrawLoadScene__($jsStringLiteral);"
-        injector(jsCall)
+        callJsFunction(LOAD_SCENE_FN, json)
     }
 
     /**
@@ -147,13 +141,7 @@ class ExcalidrawJsBridge private constructor(
      * @param theme The Excalidraw theme value — expected to be "dark" or "light".
      */
     fun sendThemeUpdate(theme: String) {
-        if (disposed) return
-        // Encode theme as a safe JS string literal (adds surrounding quotes and
-        // escapes internal quotes/backslashes).  No eval, no concatenation of
-        // untrusted data — A03 compliant.
-        val jsStringLiteral = GSON.toJson(theme)
-        val jsCall = "window.$THEME_FN($jsStringLiteral);"
-        injector(jsCall)
+        callJsFunction(THEME_FN, theme)
     }
 
     /**
@@ -165,9 +153,7 @@ class ExcalidrawJsBridge private constructor(
      * no eval, no concatenation. After [dispose] this is a no-op.
      */
     fun addLibrary(libraryItemsJson: String) {
-        if (disposed) return
-        val jsStringLiteral = GSON.toJson(libraryItemsJson)
-        injector("window.$ADD_LIBRARY_FN($jsStringLiteral);")
+        callJsFunction(ADD_LIBRARY_FN, libraryItemsJson)
     }
 
     /**
@@ -177,9 +163,7 @@ class ExcalidrawJsBridge private constructor(
      * After [dispose] this is a no-op.
      */
     fun loadLibrary(libraryItemsJson: String) {
-        if (disposed) return
-        val jsStringLiteral = GSON.toJson(libraryItemsJson)
-        injector("window.$LOAD_LIBRARY_FN($jsStringLiteral);")
+        callJsFunction(LOAD_LIBRARY_FN, libraryItemsJson)
     }
 
     /**
@@ -190,6 +174,37 @@ class ExcalidrawJsBridge private constructor(
     fun registerLibraryChangeCallback(cb: (String) -> Unit) {
         if (disposed) return
         libraryChangeCallback = cb
+    }
+
+    /**
+     * Encodes arguments and injects a safe JS call to a named window function.
+     *
+     * A03 compliance: numeric arguments are embedded directly; all other arguments
+     * are encoded via [GSON.toJson] to produce properly escaped JS string literals.
+     * No eval, no runtime string concatenation of untrusted data — the call is
+     * safe by construction.
+     *
+     * The generated call is of the form:
+     *     `window.$name(arg1, "arg2", 3.0, ...);`
+     *
+     * where string/object arguments are JSON-encoded and numeric arguments pass through.
+     *
+     * After [dispose] this is a no-op.
+     *
+     * @param name The stable window function name (must be a valid JS identifier).
+     * @param args Arguments to pass to the function: numeric types (Int, Double, etc.)
+     *   are embedded directly; all other types are JSON-encoded via [GSON.toJson].
+     */
+    private fun callJsFunction(name: String, vararg args: Any) {
+        if (disposed) return
+        val encodedArgs = args.joinToString(", ") { arg ->
+            when (arg) {
+                is Number -> arg.toString()
+                else -> GSON.toJson(arg)
+            }
+        }
+        val jsCall = "window.$name($encodedArgs);"
+        injector(jsCall)
     }
 
     /**
@@ -231,13 +246,7 @@ class ExcalidrawJsBridge private constructor(
      * @param scale  The device-pixel scale factor for PNG exports.
      */
     fun requestExport(format: String, scale: Double) {
-        if (disposed) return
-        // A03: format encoded via Gson.toJson produces a safe JSON string literal
-        // (surrounding double-quotes + internal escaping). scale is a numeric
-        // primitive — no injection risk.
-        val formatLiteral = GSON.toJson(format)
-        val jsCall = "window.$EXPORT_FN($formatLiteral, $scale);"
-        injector(jsCall)
+        callJsFunction(EXPORT_FN, format, scale)
     }
 
     /**
@@ -292,12 +301,7 @@ class ExcalidrawJsBridge private constructor(
      * @param dataUrl The data URL of the PNG file to extract the scene from.
      */
     fun requestPngExtract(dataUrl: String) {
-        if (disposed) return
-        // A03: dataUrl encoded via Gson.toJson produces a safe JSON string literal
-        // (surrounding double-quotes + internal escaping). No eval, no raw concatenation.
-        val jsStringLiteral = GSON.toJson(dataUrl)
-        val jsCall = "window.$LOAD_PNG_FN($jsStringLiteral);"
-        injector(jsCall)
+        callJsFunction(LOAD_PNG_FN, dataUrl)
     }
 
     /**
@@ -316,12 +320,7 @@ class ExcalidrawJsBridge private constructor(
      * @param sceneJson The Excalidraw scene JSON to embed in the PNG.
      */
     fun requestPngExport(sceneJson: String) {
-        if (disposed) return
-        // A03: sceneJson encoded via Gson.toJson produces a safe JSON string literal
-        // (surrounding double-quotes + internal escaping). No eval, no raw concatenation.
-        val jsStringLiteral = GSON.toJson(sceneJson)
-        val jsCall = "window.$EXPORT_PNG_FN($jsStringLiteral);"
-        injector(jsCall)
+        callJsFunction(EXPORT_PNG_FN, sceneJson)
     }
 
     /**
@@ -595,6 +594,17 @@ class ExcalidrawJsBridge private constructor(
     companion object {
 
         private val LOG: Logger = Logger.getInstance(ExcalidrawJsBridge::class.java)
+
+        /**
+         * The stable JS window-function name called by [loadScene].
+         *
+         * Single source of truth for the Kotlin→JS scene-load channel.
+         * The JS bundle (index.jsx) must expose this function on `window` so the
+         * Kotlin side can load a scene JSON into the canvas.
+         *
+         * Referenced by [loadScene] when generating the JS call.
+         */
+        const val LOAD_SCENE_FN: String = "__excalidrawLoadScene__"
 
         /**
          * The stable JS window-function name installed by [installReturnChannel].
