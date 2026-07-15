@@ -9,9 +9,6 @@ import com.intellij.ui.jcef.JBCefBrowser
 import com.intellij.ui.jcef.JBCefJSQuery
 import com.swaroop.excalidraw.plugin.export.ExportMessage
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawScene
-import java.awt.Toolkit
-import java.awt.datatransfer.DataFlavor
-import java.awt.datatransfer.StringSelection
 
 /**
  * ExcalidrawJsBridge — typed bidirectional channel between Kotlin and the
@@ -688,10 +685,11 @@ class ExcalidrawJsBridge private constructor(
             return try {
                 val obj = JsonParser.parseString(request)?.takeIf { it.isJsonObject }?.asJsonObject
                     ?: return JBCefJSQuery.Response("")
+                val clipboard = SystemClipboardAccess()
                 when (obj.get("op")?.asString) {
-                    "readText" -> JBCefJSQuery.Response(readSystemClipboardText())
+                    "readText" -> JBCefJSQuery.Response(clipboard.readText())
                     "writeText" -> {
-                        writeSystemClipboardText(obj.get("text")?.asString ?: "")
+                        clipboard.writeText(obj.get("text")?.asString ?: "")
                         JBCefJSQuery.Response("")
                     }
                     else -> JBCefJSQuery.Response("")
@@ -699,48 +697,6 @@ class ExcalidrawJsBridge private constructor(
             } catch (e: Exception) {
                 LOG.warn("ExcalidrawJsBridge: clipboard request failed", e)
                 JBCefJSQuery.Response("")
-            }
-        }
-
-        /**
-         * Reads the OS clipboard's plain-text contents, or "" when it holds no text
-         * (e.g. an image only) or is momentarily locked. The clipboard is a shared OS
-         * resource; a brief retry rides out a transient lock held by another app.
-         */
-        private fun readSystemClipboardText(): String {
-            val clipboard = Toolkit.getDefaultToolkit().systemClipboard
-            repeat(CLIPBOARD_RETRIES) {
-                try {
-                    return clipboard.getData(DataFlavor.stringFlavor) as? String ?: ""
-                } catch (_: IllegalStateException) {
-                    sleepQuietly()          // clipboard busy — retry
-                } catch (_: Exception) {
-                    return ""               // no string flavor / IO — treat as empty
-                }
-            }
-            return ""
-        }
-
-        /** Writes [text] to the OS clipboard, retrying briefly through a transient lock. */
-        private fun writeSystemClipboardText(text: String) {
-            val clipboard = Toolkit.getDefaultToolkit().systemClipboard
-            repeat(CLIPBOARD_RETRIES) {
-                try {
-                    clipboard.setContents(StringSelection(text), null)
-                    return
-                } catch (_: IllegalStateException) {
-                    sleepQuietly()
-                }
-            }
-        }
-
-        private const val CLIPBOARD_RETRIES: Int = 3
-
-        private fun sleepQuietly() {
-            try {
-                Thread.sleep(20)
-            } catch (_: InterruptedException) {
-                Thread.currentThread().interrupt()
             }
         }
 
