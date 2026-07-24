@@ -108,8 +108,8 @@ class ExcalidrawExtensionSettings : PersistentStateComponent<ExcalidrawExtension
          * that do not bootstrap the IDE platform). Callers must handle the nullable
          * result.
          */
-        fun getInstance(): ExcalidrawExtensionSettings =
-            ApplicationManager.getApplication().getService(ExcalidrawExtensionSettings::class.java)
+        fun getInstance(): ExcalidrawExtensionSettings? =
+            ApplicationManager.getApplication()?.getService(ExcalidrawExtensionSettings::class.java)
     }
 
     // -----------------------------------------------------------------------

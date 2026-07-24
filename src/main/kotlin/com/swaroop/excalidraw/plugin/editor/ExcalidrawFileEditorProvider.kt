@@ -20,7 +20,7 @@ import com.swaroop.excalidraw.plugin.settings.ExcalidrawExtensionSettings
  * crashing; an empty service list falls back to the defaults.
  */
 private fun configuredExtensionsOrDefault(): List<String> =
-    runCatching { ExcalidrawExtensionSettings.getInstance().getExtensions() }
+    runCatching { ExcalidrawExtensionSettings.getInstance()?.getExtensions() }
         .getOrNull()
         ?.takeIf { it.isNotEmpty() }
         ?: ExcalidrawFileEditorProvider.DEFAULT_SUFFIXES
