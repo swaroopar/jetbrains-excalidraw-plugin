@@ -68,7 +68,7 @@ jobs:
           timeout --preserve-status --signal=TERM --kill-after=30s 240s \
             xvfb-run -a ./gradlew runIde --no-configuration-cache > runide.out 2>&1 || true
 
-          LOG=$(find build/idea-sandbox -name idea.log -path '*log*' | head -1)
+          LOG=$(find .intellijPlatform/sandbox build/idea-sandbox -name idea.log -path '*log*' 2>/dev/null | head -1)
           echo "sandbox log: ${LOG:-<none>}"
           if [ -z "${LOG:-}" ] || [ ! -f "$LOG" ]; then
             echo "::error::No sandbox idea.log was produced — the IDE did not boot."
@@ -98,5 +98,6 @@ jobs:
           name: runide-smoke-logs
           path: |
             runide.out
+            .intellijPlatform/sandbox/**/log/idea.log
             build/idea-sandbox/**/log/idea.log
           if-no-files-found: ignore
