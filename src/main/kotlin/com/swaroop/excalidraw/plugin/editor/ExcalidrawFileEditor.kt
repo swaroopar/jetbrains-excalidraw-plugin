@@ -960,11 +960,20 @@ class ExcalidrawFileEditor private constructor(
      * becomes active, which is typically well before JCEF's async page load completes.
      * Once [ExcalidrawThemeController.isReady] is true, re-pushing is safe and this is a
      * no-op after disposal (guarded internally by [ExcalidrawThemeController.pushCurrentTheme]).
+     *
+     * Also calls [ExcalidrawJsBridge.triggerCanvasRefresh]: re-pushing the theme alone is
+     * not enough to fix a background tab that already had the correct theme value applied
+     * in its JS state (e.g. via the live [com.intellij.ide.ui.LafManagerListener] push while
+     * it was hidden) but never got a chance to actually repaint its canvas — React bails
+     * out of re-rendering when [ExcalidrawJsBridge.sendThemeUpdate] is called again with an
+     * unchanged value, so no new redraw would otherwise be scheduled. Dispatching a
+     * synthetic `resize` event forces Excalidraw to redraw its canvas unconditionally.
      */
     override fun selectNotify() {
         themeController?.let { controller ->
             if (controller.isReady) {
                 controller.pushCurrentTheme()
+                bridge.triggerCanvasRefresh()
             }
         }
     }

@@ -327,6 +327,10 @@ class ExcalidrawFileEditorTest {
             injectedJs.any { it.contains("__excalidrawSetTheme__") && it.contains("dark") },
             "selectNotify must re-push the current theme; got: $injectedJs"
         )
+        assertTrue(
+            injectedJs.any { it.contains("dispatchEvent") && it.contains("resize") },
+            "selectNotify must also force a canvas repaint via a synthetic resize event; got: $injectedJs"
+        )
 
         editor.dispose()
     }
@@ -372,6 +376,10 @@ class ExcalidrawFileEditorTest {
         assertTrue(
             injectedJs.none { it.contains("__excalidrawSetTheme__") },
             "selectNotify must not push the theme before the controller is ready; got: $injectedJs"
+        )
+        assertTrue(
+            injectedJs.none { it.contains("dispatchEvent") && it.contains("resize") },
+            "selectNotify must not force a canvas repaint before the controller is ready; got: $injectedJs"
         )
 
         editor.dispose()
