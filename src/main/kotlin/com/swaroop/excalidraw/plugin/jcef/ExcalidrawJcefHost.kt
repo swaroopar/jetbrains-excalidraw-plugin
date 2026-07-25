@@ -177,6 +177,25 @@ class ExcalidrawJcefHost private constructor(
             if (System.getProperty("excalidraw.devtools") == "true") {
                 browser.openDevtools()
             }
+            // TEMPORARY diagnostic (task: theme-switch bug investigation) — forwards the
+            // page's console.log/warn/error output into idea.log, so the JS-side theme
+            // detection can be inspected without needing the DevTools popup to work.
+            // Remove once root cause of "fresh files open in wrong theme" is confirmed.
+            browser.jbCefClient?.addDisplayHandler(
+                object : org.cef.handler.CefDisplayHandlerAdapter() {
+                    override fun onConsoleMessage(
+                        cefBrowser: CefBrowser?,
+                        level: org.cef.CefSettings.LogSeverity?,
+                        message: String?,
+                        source: String?,
+                        line: Int
+                    ): Boolean {
+                        LOG.warn("Excalidraw [js-console] [$level] $message (at $source:$line)")
+                        return false
+                    }
+                },
+                browser.cefBrowser
+            )
             return host
         }
 
@@ -393,6 +412,18 @@ class ExcalidrawJcefHost private constructor(
                     // Only fire for the main frame (frame.isMain guarantees we don't
                     // react to sub-frame loads such as iframes — A03: no injection via sub-frames).
                     if (frame?.isMain == true) {
+                        // TEMPORARY diagnostic (task: theme-switch bug investigation) —
+                        // logs what the PAGE itself sees for the theme query param, to
+                        // rule in/out a JS-side parsing issue vs. the already-confirmed-
+                        // correct Kotlin-side theme computation. Remove once root cause
+                        // of "fresh files open in wrong theme" is confirmed.
+                        cefBrowser?.executeJavaScript(
+                            "console.log('[excalidraw-diagnostic] href=' + window.location.href + " +
+                                "' search=' + window.location.search + " +
+                                "' parsedTheme=' + new URLSearchParams(window.location.search).get('theme'));",
+                            cefBrowser.url,
+                            0
+                        )
                         fireLoadEnd()
                     }
                 }
