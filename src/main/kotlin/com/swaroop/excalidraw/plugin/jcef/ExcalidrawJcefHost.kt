@@ -86,7 +86,14 @@ class ExcalidrawJcefHost private constructor(
          * [ExcalidrawSchemeHandler.extractPath] strips this query string before
          * resolving the classpath resource, so it has no effect on which file is served.
          */
-        internal fun startUrlWithTheme(): String = "$START_URL?theme=${ThemeMapper.currentExcalidrawTheme()}"
+        internal fun startUrlWithTheme(): String {
+            val theme = ThemeMapper.currentExcalidrawTheme()
+            val url = "$START_URL?theme=$theme"
+            // TEMPORARY diagnostic logging (task: theme-switch bug investigation) —
+            // remove once root cause of "fresh files open in wrong theme" is confirmed.
+            LOG.warn("Excalidraw [theme-diagnostic] startUrlWithTheme computed theme='$theme' url='$url'")
+            return url
+        }
 
         /**
          * Max number of times to reload [START_URL] when the initial navigation fails
