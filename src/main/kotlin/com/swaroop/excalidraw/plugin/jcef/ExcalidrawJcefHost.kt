@@ -8,6 +8,7 @@ import com.intellij.util.concurrency.EdtScheduledExecutorService
 import com.intellij.ui.jcef.JBCefApp
 import com.intellij.ui.jcef.JBCefBrowser
 import com.intellij.ui.jcef.JcefShortcutProvider
+import com.swaroop.excalidraw.plugin.theme.ThemeMapper
 import org.cef.browser.CefBrowser
 import org.cef.browser.CefFrame
 import org.cef.callback.CefSchemeRegistrar
@@ -66,6 +67,21 @@ class ExcalidrawJcefHost private constructor(
         private val LOG = logger<ExcalidrawJcefHost>()
 
         /**
+         * Builds the URL to navigate to, appending the IDE's current theme as a
+         * `?theme=light|dark` query param on [START_URL].
+         *
+         * AC-E4-01 (no theme flash): index.jsx reads this query param to seed its
+         * React.useState initial value, so the very first paint already matches the
+         * IDE's theme — instead of always rendering "light" first and only switching
+         * to dark after ExcalidrawThemeController.pushCurrentTheme() fires on loadEnd
+         * (which is otherwise visible to the user as a light-then-dark flash).
+         *
+         * [ExcalidrawSchemeHandler.extractPath] strips this query string before
+         * resolving the classpath resource, so it has no effect on which file is served.
+         */
+        internal fun startUrlWithTheme(): String = "$START_URL?theme=${ThemeMapper.currentExcalidrawTheme()}"
+
+        /**
          * Max number of times to reload [START_URL] when the initial navigation fails
          * because the `excalidraw://` scheme isn't registered yet (startup race).
          */
@@ -86,7 +102,7 @@ class ExcalidrawJcefHost private constructor(
          */
         operator fun invoke(): ExcalidrawJcefHost {
             val browser = JBCefBrowser.createBuilder()
-                .setUrl(START_URL)
+                .setUrl(startUrlWithTheme())
                 .build()
             val host = ExcalidrawJcefHost(browser)
             host.registerLoadHandler()
@@ -261,7 +277,7 @@ class ExcalidrawJcefHost private constructor(
                                     // re-fires the scene-push — otherwise the first restored
                                     // editor on IDE restart renders empty.
                                     armForReload()
-                                    browser.cefBrowser.loadURL(START_URL)
+                                    browser.cefBrowser.loadURL(startUrlWithTheme())
                                 }
                             },
                             SCHEME_RELOAD_DELAY_MS.toLong(),

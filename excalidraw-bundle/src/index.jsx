@@ -31,6 +31,32 @@ function sendToKotlin(payload) {
 var VALID_THEMES = ["light", "dark"];
 
 /**
+ * initialTheme — reads the `?theme=light|dark` query param that
+ * ExcalidrawJcefHost.startUrlWithTheme() appends to the page URL (computed from the
+ * IDE's current LookAndFeel at navigation time) and validates it against
+ * VALID_THEMES.
+ *
+ * Fixes the light-then-dark flash: without this, App() always started from
+ * React.useState("light") and only switched to "dark" once Kotlin called
+ * window.__excalidrawSetTheme__ after loadEnd — visible to the user as a flash of
+ * light mode before the correct dark theme applied. Seeding useState from the URL
+ * means the very first paint already matches the IDE theme.
+ *
+ * A03: the raw query value is never trusted directly — it is only used if it is an
+ * exact match in the VALID_THEMES whitelist; any other value (or absence) falls
+ * back to "light".
+ */
+function initialTheme() {
+  try {
+    var params = new URLSearchParams(window.location.search);
+    var theme = params.get("theme");
+    return VALID_THEMES.indexOf(theme) !== -1 ? theme : "light";
+  } catch (e) {
+    return "light";
+  }
+}
+
+/**
  * VALID_EXPORT_FORMATS — whitelist of accepted export format values (A03: input validation).
  * Only "svg" and "png" are supported export formats.
  * Any other value passed to window.__excalidrawExport__ is silently ignored.
@@ -57,7 +83,7 @@ var VALID_EXPORT_FORMATS = ["svg", "png"];
  * because React commits and runs effects synchronously relative to the mount.
  */
 function App() {
-  var themeState = React.useState("light");
+  var themeState = React.useState(initialTheme);
   var theme = themeState[0];
   var setTheme = themeState[1];
 

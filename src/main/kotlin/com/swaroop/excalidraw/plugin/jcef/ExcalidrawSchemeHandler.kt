@@ -141,9 +141,13 @@ class ExcalidrawSchemeHandler {
         private fun extractPath(url: String): String {
             // excalidraw://host/some/path -> "some/path"
             // excalidraw://app/index.html -> "index.html"
+            // excalidraw://app/index.html?theme=dark -> "index.html" (query/fragment
+            // stripped — e.g. the initial-theme query param set by ExcalidrawJcefHost
+            // must not be treated as part of the classpath resource path).
             val withoutScheme = url.removePrefix("excalidraw://")
             val slashIdx = withoutScheme.indexOf('/')
-            return if (slashIdx >= 0) withoutScheme.substring(slashIdx + 1) else ""
+            val pathWithQuery = if (slashIdx >= 0) withoutScheme.substring(slashIdx + 1) else ""
+            return pathWithQuery.substringBefore('?').substringBefore('#')
         }
     }
 
