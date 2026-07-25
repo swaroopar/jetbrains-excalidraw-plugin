@@ -331,6 +331,52 @@ class ExcalidrawFileEditorTest {
         editor.dispose()
     }
 
+    /**
+     * Regression test for the "always opens in light mode" bug caused by an
+     * earlier, unconditional version of [ExcalidrawFileEditor.selectNotify]:
+     * calling it BEFORE the JCEF page has completed its initial load (i.e.
+     * before [ExcalidrawThemeController.isReady] is true, before [fireLoadEnd]
+     * below) must be a no-op — pushing `__excalidrawSetTheme__` into a
+     * not-yet-rendered page is unreliable and left freshly-opened tabs stuck
+     * on the wrong theme.
+     */
+    @Test
+    fun `selectNotify is a no-op before the theme controller is ready`() {
+        val injectedJs = mutableListOf<String>()
+        val stubBridge = ExcalidrawJsBridge.createForTest(
+            injector = { js -> injectedJs.add(js) }
+        )
+
+        val themeController = com.swaroop.excalidraw.plugin.theme.ExcalidrawThemeController(
+            bridge = stubBridge,
+            themeProvider = { "dark" },
+            listenerRegistrar = { }
+        )
+
+        val file = stubVirtualFile("scene.excalidraw", validSceneJson)
+        val stubHost = ExcalidrawJcefHost.createForTest()
+
+        val editor = ExcalidrawFileEditor.createForTest(
+            file = file,
+            jcefHost = stubHost,
+            bridge = stubBridge,
+            persistenceService = ExcalidrawPersistenceService(),
+            themeController = themeController
+        )
+
+        // Deliberately do NOT fire loadEnd — simulates selectNotify firing as
+        // soon as a freshly-opened tab becomes active, before the async JCEF
+        // page load has completed.
+        editor.selectNotify()
+
+        assertTrue(
+            injectedJs.none { it.contains("__excalidrawSetTheme__") },
+            "selectNotify must not push the theme before the controller is ready; got: $injectedJs"
+        )
+
+        editor.dispose()
+    }
+
     // -------------------------------------------------------------------------
     // Structural invariants
     // -------------------------------------------------------------------------

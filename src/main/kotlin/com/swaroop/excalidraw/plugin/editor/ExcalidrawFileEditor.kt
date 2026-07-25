@@ -951,12 +951,22 @@ class ExcalidrawFileEditor private constructor(
      * theme the moment the user switches to it, regardless of whether the live push while it
      * was in the background actually landed.
      *
-     * No-op before the initial [ExcalidrawThemeController.pushCurrentTheme] call (i.e. before
-     * JCEF's loadEnd has fired) or after this editor/controller has been disposed —
-     * [ExcalidrawThemeController.pushCurrentTheme] guards both cases internally.
+     * Guarded by [ExcalidrawThemeController.isReady]: before the loadEnd callback has
+     * fired its own initial [ExcalidrawThemeController.pushCurrentTheme] call, the page
+     * has not navigated/rendered yet and `window.__excalidrawSetTheme__` is not defined.
+     * Re-pushing at that point is unreliable and was observed to leave freshly-opened
+     * tabs stuck showing the wrong (light) theme on first open — regardless of the
+     * IDE's actual theme — because `selectNotify` fires as soon as a newly-opened tab
+     * becomes active, which is typically well before JCEF's async page load completes.
+     * Once [ExcalidrawThemeController.isReady] is true, re-pushing is safe and this is a
+     * no-op after disposal (guarded internally by [ExcalidrawThemeController.pushCurrentTheme]).
      */
     override fun selectNotify() {
-        themeController?.pushCurrentTheme()
+        themeController?.let { controller ->
+            if (controller.isReady) {
+                controller.pushCurrentTheme()
+            }
+        }
     }
 
     // -------------------------------------------------------------------------
