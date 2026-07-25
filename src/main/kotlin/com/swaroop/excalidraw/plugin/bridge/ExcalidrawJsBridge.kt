@@ -4,6 +4,7 @@ import com.google.gson.Gson
 import com.google.gson.JsonParser
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.ui.jcef.JBCefBrowser
 import com.intellij.ui.jcef.JBCefJSQuery
@@ -688,7 +689,8 @@ class ExcalidrawJsBridge private constructor(
 
         /**
          * Handles a clipboard round-trip request from the JS shim installed by
-         * [installClipboardBridge]. Runs on a JCEF query thread and returns synchronously.
+         * [installClipboardBridge]. Returns synchronously; the actual clipboard access is
+         * dispatched onto the EDT (see [runOnEdt]).
          *
          * Request shape: `{"op":"readText"}` or `{"op":"writeText","text":"..."}`.
          * Returns the clipboard text (readText) or an empty string (writeText / on any
@@ -701,9 +703,9 @@ class ExcalidrawJsBridge private constructor(
                     ?: return JBCefJSQuery.Response("")
                 val clipboard = SystemClipboardAccess()
                 when (obj.get("op")?.asString) {
-                    "readText" -> JBCefJSQuery.Response(clipboard.readText())
+                    "readText" -> JBCefJSQuery.Response(runOnEdt { clipboard.readText() } ?: "")
                     "writeText" -> {
-                        clipboard.writeText(obj.get("text")?.asString ?: "")
+                        runOnEdt { clipboard.writeText(obj.get("text")?.asString ?: "") }
                         JBCefJSQuery.Response("")
                     }
                     else -> JBCefJSQuery.Response("")
@@ -712,6 +714,30 @@ class ExcalidrawJsBridge private constructor(
                 LOG.warn("ExcalidrawJsBridge: clipboard request failed", e)
                 JBCefJSQuery.Response("")
             }
+        }
+
+        /**
+         * Runs [action] on the EDT and blocks (this method itself already runs on a JCEF
+         * query thread, not the EDT) until it completes, returning its result.
+         *
+         * Why this matters (the ~2s paste delay bug): [handleClipboardRequest] is invoked by
+         * JCEF on one of its own query threads, not the Swing EDT. On macOS, touching
+         * `Toolkit.getDefaultToolkit().getSystemClipboard()` from a thread other than the EDT
+         * (which is the thread AWT/AppKit expects for all Toolkit/clipboard access) can incur
+         * a multi-second stall while the JVM cross-thread-synchronises with the native AppKit
+         * run loop — this, not [SystemClipboardAccess]'s own short lock-retry backoff, is what
+         * produced the noticeable "paste appears ~2 seconds later" delay. Explicitly hopping
+         * onto the EDT (where AWT/Clipboard access is fast and where CopyPasteManager and
+         * every other IDE clipboard consumer already run) avoids that cross-thread stall.
+         *
+         * Falls back to running [action] directly on the calling thread when there is no
+         * [ApplicationManager.getApplication] (headless/unit-test JVMs).
+         */
+        private fun <T> runOnEdt(action: () -> T): T? {
+            val application = ApplicationManager.getApplication() ?: return action()
+            var result: T? = null
+            application.invokeAndWait({ result = action() }, ModalityState.any())
+            return result
         }
 
         /**
