@@ -2,8 +2,10 @@ package com.swaroop.excalidraw.plugin.jcef
 
 import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.logger
+import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.util.concurrency.EdtScheduledExecutorService
 import com.intellij.ui.jcef.JBCefApp
 import com.intellij.ui.jcef.JBCefBrowser
@@ -15,6 +17,7 @@ import org.cef.handler.CefLifeSpanHandlerAdapter
 import org.cef.handler.CefLoadHandler
 import org.cef.handler.CefLoadHandlerAdapter
 import org.cef.network.CefRequest
+import java.awt.event.KeyEvent
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import javax.swing.JComponent
@@ -193,30 +196,84 @@ class ExcalidrawJcefHost private constructor(
     }
 
     /**
-     * Frees the platform edit shortcuts (Ctrl/⌘ + C/V/X/A/Z/Y) for the Excalidraw canvas.
+     * Frees the platform edit shortcuts (Ctrl/⌘ + C/V/X/A/Z/Y) for the Excalidraw canvas and
+     * re-binds them to forward the *real* key event straight into the Chromium renderer.
      *
      * On macOS, [JBCefBrowser] auto-registers [JcefShortcutProvider] actions on its
      * component ([JBCefBrowser.createComponent] → `if (SystemInfo.isMac)`), binding
      * `$Copy`/`$Paste`/`$Cut`/`$SelectAll`/`$Undo`/`$Redo` to native `CefFrame` edit
-     * commands. Those native commands act only on a focused *editable DOM element* —
-     * but Excalidraw is a `<canvas>` app that implements copy/paste/cut/select-all/
-     * undo/redo entirely in its own JS `keydown` handlers. So the IDE grabs the
-     * keystroke, routes it to a native command that no-ops on the canvas, and
-     * Excalidraw never sees it — ⌘C/⌘V/⌘Z/⌘A/… do nothing.
+     * commands (`CefFrame.copy()`/`.paste()`/etc). Those native commands only affect a
+     * focused *editable DOM element* (e.g. `<input>`/`contenteditable`) — but Excalidraw is
+     * a `<canvas>` app that implements copy/paste/cut/select-all/undo/redo entirely in its
+     * own JS `keydown` handlers. So on macOS the keystroke is grabbed by
+     * [JcefShortcutProvider], routed to a native command that no-ops on the canvas, and
+     * Excalidraw's JS handler never even sees a `keydown` event — ⌘C/⌘V/⌘Z/⌘A/… appear to
+     * do nothing.
      *
-     * Unregistering those actions from the browser component lets the keystrokes fall
-     * through to the webview, where Excalidraw's handlers run (matching how the same
-     * shortcuts already work on Windows/Linux, where the platform never registers them).
+     * Merely unregistering [JcefShortcutProvider]'s bindings is not sufficient: on macOS,
+     * ⌘-based accelerators are otherwise intercepted by the shared screen menu bar before
+     * they ever reach the embedded browser's native view, so simply freeing the shortcut
+     * does not make the keystroke "fall through" — it just becomes an unhandled, silently
+     * swallowed accelerator (matching the symptom of ⌘C/⌘V doing nothing at all).
      *
-     * No-op off macOS (nothing was registered) and on JCEF API versions too old to
-     * expose the actions ([JcefShortcutProvider.getActions] returns an empty list).
-     * Guarded by `runCatching` so a platform API change can never break editor open.
+     * The fix: re-register the *same* shortcuts on the browser component, but bind them to
+     * [forwardKeyEventToCanvas] instead, which uses [CefBrowser.sendKeyEvent] — the JCEF API
+     * built for exactly this purpose — to inject a synthetic native key event directly into
+     * the Chromium renderer. That is indistinguishable, from Excalidraw's perspective, from
+     * the browser having received the keystroke natively (as already happens on
+     * Windows/Linux, where the platform never intercepts these shortcuts in the first
+     * place), so its own `keydown`-driven copy/paste/undo/redo logic runs normally — using
+     * the fast, synchronous native clipboard path instead of the slower async
+     * `navigator.clipboard` bridge (see [com.swaroop.excalidraw.plugin.bridge.ExcalidrawJsBridge.installClipboardBridge]).
+     *
+     * No-op off macOS (nothing was registered by [JcefShortcutProvider] there) and on JCEF
+     * API versions too old to expose the actions ([JcefShortcutProvider.getActions] returns
+     * an empty list). Guarded by `runCatching` so a platform API change can never break
+     * editor open.
      */
     private fun releaseEditShortcutsToCanvas() {
         val component = browser?.component ?: return
         runCatching {
-            JcefShortcutProvider.getActions().forEach { it.second.unregisterCustomShortcutSet(component) }
+            val actionManager = ActionManager.getInstance()
+            JcefShortcutProvider.getActions().forEach { pair ->
+                val actionId = pair.first
+                val noOpAction = pair.second
+                noOpAction.unregisterCustomShortcutSet(component)
+                val shortcutSet = actionManager.getAction(actionId)?.shortcutSet ?: return@forEach
+                val forwardingAction = DumbAwareAction.create { event ->
+                    (event.inputEvent as? KeyEvent)?.let { forwardKeyEventToCanvas(it) }
+                }
+                forwardingAction.registerCustomShortcutSet(shortcutSet, component)
+            }
         }.onFailure { LOG.warn("Excalidraw: could not release JCEF edit shortcuts to the canvas", it) }
+    }
+
+    /**
+     * Injects [source] into the Chromium renderer via [CefBrowser.sendKeyEvent], the JCEF API
+     * for delivering a synthetic native key event as if the OS had dispatched it directly to
+     * the browser. Mirrors the PRESSED → TYPED → RELEASED sequence JCEF itself sends for a
+     * real keystroke (see `CefBrowserOsr`'s key listener), so Excalidraw's `keydown`/`keyup`
+     * handlers observe the same event sequence they would from native input.
+     *
+     * [source] is the [KeyEvent] captured from the triggering [AnActionEvent.getInputEvent]
+     * (see [releaseEditShortcutsToCanvas]) — its key code, key char, and modifiers are reused
+     * verbatim so the forwarded event matches what the user actually pressed.
+     */
+    private fun forwardKeyEventToCanvas(source: KeyEvent) {
+        val cefBrowser = browser?.cefBrowser ?: return
+        val uiComponent = cefBrowser.getUIComponent() ?: return
+        val now = System.currentTimeMillis()
+        cefBrowser.sendKeyEvent(
+            KeyEvent(uiComponent, KeyEvent.KEY_PRESSED, now, source.modifiersEx, source.keyCode, source.keyChar)
+        )
+        if (source.keyChar != KeyEvent.CHAR_UNDEFINED) {
+            cefBrowser.sendKeyEvent(
+                KeyEvent(uiComponent, KeyEvent.KEY_TYPED, now, source.modifiersEx, KeyEvent.VK_UNDEFINED, source.keyChar)
+            )
+        }
+        cefBrowser.sendKeyEvent(
+            KeyEvent(uiComponent, KeyEvent.KEY_RELEASED, now, source.modifiersEx, source.keyCode, source.keyChar)
+        )
     }
 
     /**
