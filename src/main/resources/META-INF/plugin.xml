@@ -21,6 +21,13 @@
     <!-- Platform module dependency — required for all IntelliJ Platform plugins. -->
     <depends>com.intellij.modules.platform</depends>
 
+    <!-- JCEF module dependency — required because JBCefApp/JBCefBrowser now ship as a
+         separate bundled module (jcef-plugin) rather than being part of core platform
+         classes on newer IDE builds. Without this, com.intellij.ui.jcef.JBCefApp
+         resolves to NoClassDefFoundError at runtime even though it's present at compile
+         time (the compile-time SDK still bundles it directly). -->
+    <depends>com.intellij.modules.jcef</depends>
+
     <extensions defaultExtensionNs="com.intellij">
 
         <!-- Register the excalidraw:// custom scheme handler ONCE at app startup, before
