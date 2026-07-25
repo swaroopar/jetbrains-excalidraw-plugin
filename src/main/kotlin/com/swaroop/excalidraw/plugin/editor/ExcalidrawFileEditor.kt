@@ -936,6 +936,29 @@ class ExcalidrawFileEditor private constructor(
     /** Human-readable name for this editor type; displayed in the IDE's "Open with" selector. */
     override fun getName(): String = EDITOR_NAME
 
+    /**
+     * Re-pushes the current IDE theme whenever this tab becomes the selected editor.
+     *
+     * Background rationale: [ExcalidrawThemeController] pushes theme updates to every open
+     * editor's browser via the live [com.intellij.ide.ui.LafManagerListener] callback (fired
+     * on the Application message bus), so in principle all open tabs should update together
+     * when the user switches the IDE theme. In practice, background (non-selected) JCEF
+     * browser components are not always fully realized/attached to a native peer while
+     * hidden, so a theme update delivered while a tab is in the background can be missed or
+     * left un-rendered by that tab's Chromium instance. Re-pushing on [selectNotify] (called
+     * by the IDE every time this tab becomes visible/active) is a cheap, idempotent
+     * belt-and-suspenders fix: it guarantees the visible tab always reflects the current IDE
+     * theme the moment the user switches to it, regardless of whether the live push while it
+     * was in the background actually landed.
+     *
+     * No-op before the initial [ExcalidrawThemeController.pushCurrentTheme] call (i.e. before
+     * JCEF's loadEnd has fired) or after this editor/controller has been disposed —
+     * [ExcalidrawThemeController.pushCurrentTheme] guards both cases internally.
+     */
+    override fun selectNotify() {
+        themeController?.pushCurrentTheme()
+    }
+
     // -------------------------------------------------------------------------
     // FileEditor contract — modification and validity stubs
     // -------------------------------------------------------------------------

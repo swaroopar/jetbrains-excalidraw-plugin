@@ -283,6 +283,55 @@ class ExcalidrawFileEditorTest {
     }
 
     // -------------------------------------------------------------------------
+    // selectNotify() — stale background-tab theme fix
+    // -------------------------------------------------------------------------
+
+    /**
+     * Regression test for the "background tabs keep stale theme after IDE
+     * theme switch" bug: [ExcalidrawFileEditor.selectNotify] must re-push the
+     * current theme every time the tab becomes the active/visible editor, so
+     * a tab that missed (or never received) a live [ExcalidrawThemeController]
+     * update while backgrounded is guaranteed to be correct as soon as the
+     * user switches to it.
+     */
+    @Test
+    fun `selectNotify re-pushes the current theme`() {
+        val injectedJs = mutableListOf<String>()
+        val stubBridge = ExcalidrawJsBridge.createForTest(
+            injector = { js -> injectedJs.add(js) }
+        )
+
+        val themeController = com.swaroop.excalidraw.plugin.theme.ExcalidrawThemeController(
+            bridge = stubBridge,
+            themeProvider = { "dark" },
+            listenerRegistrar = { }
+        )
+
+        val file = stubVirtualFile("scene.excalidraw", validSceneJson)
+        val stubHost = ExcalidrawJcefHost.createForTest()
+
+        val editor = ExcalidrawFileEditor.createForTest(
+            file = file,
+            jcefHost = stubHost,
+            bridge = stubBridge,
+            persistenceService = ExcalidrawPersistenceService(),
+            themeController = themeController
+        )
+
+        stubHost.fireLoadEnd()
+        injectedJs.clear()
+
+        editor.selectNotify()
+
+        assertTrue(
+            injectedJs.any { it.contains("__excalidrawSetTheme__") && it.contains("dark") },
+            "selectNotify must re-push the current theme; got: $injectedJs"
+        )
+
+        editor.dispose()
+    }
+
+    // -------------------------------------------------------------------------
     // Structural invariants
     // -------------------------------------------------------------------------
 
