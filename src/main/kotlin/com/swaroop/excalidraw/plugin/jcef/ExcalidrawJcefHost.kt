@@ -424,6 +424,27 @@ class ExcalidrawJcefHost private constructor(
                             cefBrowser.url,
                             0
                         )
+                        // TEMPORARY diagnostic (task: theme-switch bug investigation) —
+                        // the URL/query-param plumbing is now confirmed correct end-to-end,
+                        // yet the canvas is still reported as visually light. This checks
+                        // whether Excalidraw's own DOM actually reflects the dark theme
+                        // (class list / data-theme attribute / computed background) a couple
+                        // of seconds after load, to rule in/out a rendering-only issue (e.g.
+                        // stale cached bundle.js/css) versus a React-state issue. Remove once
+                        // root cause is confirmed.
+                        cefBrowser?.executeJavaScript(
+                            "setTimeout(function() {" +
+                                "  var el = document.querySelector('.excalidraw');" +
+                                "  console.log('[excalidraw-diagnostic-dom] found=' + !!el +" +
+                                "    ' class=' + (el ? el.className : 'n/a') +" +
+                                "    ' dataTheme=' + (el ? el.getAttribute('data-theme') : 'n/a') +" +
+                                "    ' bg=' + (el ? getComputedStyle(el).backgroundColor : 'n/a') +" +
+                                "    ' bodyBg=' + getComputedStyle(document.body).backgroundColor +" +
+                                "    ' hasSetTheme=' + (typeof window.__excalidrawSetTheme__));" +
+                                "}, 2000);",
+                            cefBrowser.url,
+                            0
+                        )
                         fireLoadEnd()
                     }
                 }
