@@ -452,12 +452,15 @@ class ExcalidrawJcefHost private constructor(
                         // has separately been confirmed to be "dark" on every render).
                         // Remove once root cause is confirmed.
                         cefBrowser?.executeJavaScript(
-                            "setTimeout(function() {" +
-                                "  var api = window.__excalidrawDebugAPI__;" +
-                                "  var appState = api ? api.getAppState() : null;" +
-                                "  console.log('[excalidraw-diagnostic-appstate] hasApi=' + !!api +" +
-                                "    ' appStateTheme=' + (appState ? appState.theme : 'n/a'));" +
-                                "}, 2000);",
+                            "[50, 200, 500, 1000, 2000, 4000].forEach(function(delay) {" +
+                                "  setTimeout(function() {" +
+                                "    var api = window.__excalidrawDebugAPI__;" +
+                                "    var appState = api ? api.getAppState() : null;" +
+                                "    console.log('[excalidraw-diagnostic-appstate] t=' + delay +" +
+                                "      'ms hasApi=' + !!api +" +
+                                "      ' appStateTheme=' + (appState ? appState.theme : 'n/a'));" +
+                                "  }, delay);" +
+                                "});",
                             cefBrowser.url,
                             0
                         )
