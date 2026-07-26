@@ -355,6 +355,13 @@ function App() {
     theme: theme,
     excalidrawAPI: function (api) {
       excalidrawAPIRef.current = api;
+      // TEMPORARY diagnostic (task: theme-switch bug investigation) — exposes the
+      // Excalidraw API instance globally so a delayed diagnostic script can read
+      // getAppState().theme directly, to see whether Excalidraw's OWN internal
+      // appState.theme ever reflects the (confirmed-correct) theme prop we pass
+      // in. Remove once root cause of "fresh files open in wrong theme" is
+      // confirmed.
+      window.__excalidrawDebugAPI__ = api;
     },
     UIOptions: {
       canvasActions: {

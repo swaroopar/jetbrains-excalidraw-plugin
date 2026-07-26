@@ -445,6 +445,22 @@ class ExcalidrawJcefHost private constructor(
                             cefBrowser.url,
                             0
                         )
+                        // TEMPORARY diagnostic (task: theme-switch bug investigation) —
+                        // reads Excalidraw's OWN internal appState.theme directly via the
+                        // API instance (exposed globally by index.jsx for this purpose),
+                        // to see whether it ever picks up the theme prop we pass in (which
+                        // has separately been confirmed to be "dark" on every render).
+                        // Remove once root cause is confirmed.
+                        cefBrowser?.executeJavaScript(
+                            "setTimeout(function() {" +
+                                "  var api = window.__excalidrawDebugAPI__;" +
+                                "  var appState = api ? api.getAppState() : null;" +
+                                "  console.log('[excalidraw-diagnostic-appstate] hasApi=' + !!api +" +
+                                "    ' appStateTheme=' + (appState ? appState.theme : 'n/a'));" +
+                                "}, 2000);",
+                            cefBrowser.url,
+                            0
+                        )
                         fireLoadEnd()
                     }
                 }
