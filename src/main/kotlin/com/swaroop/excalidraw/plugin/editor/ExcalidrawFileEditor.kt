@@ -936,6 +936,48 @@ class ExcalidrawFileEditor private constructor(
     /** Human-readable name for this editor type; displayed in the IDE's "Open with" selector. */
     override fun getName(): String = EDITOR_NAME
 
+    /**
+     * Re-pushes the current IDE theme whenever this tab becomes the selected editor.
+     *
+     * Background rationale: [ExcalidrawThemeController] pushes theme updates to every open
+     * editor's browser via the live [com.intellij.ide.ui.LafManagerListener] callback (fired
+     * on the Application message bus), so in principle all open tabs should update together
+     * when the user switches the IDE theme. In practice, background (non-selected) JCEF
+     * browser components are not always fully realized/attached to a native peer while
+     * hidden, so a theme update delivered while a tab is in the background can be missed or
+     * left un-rendered by that tab's Chromium instance. Re-pushing on [selectNotify] (called
+     * by the IDE every time this tab becomes visible/active) is a cheap, idempotent
+     * belt-and-suspenders fix: it guarantees the visible tab always reflects the current IDE
+     * theme the moment the user switches to it, regardless of whether the live push while it
+     * was in the background actually landed.
+     *
+     * Guarded by [ExcalidrawThemeController.isReady]: before the loadEnd callback has
+     * fired its own initial [ExcalidrawThemeController.pushCurrentTheme] call, the page
+     * has not navigated/rendered yet and `window.__excalidrawSetTheme__` is not defined.
+     * Re-pushing at that point is unreliable and was observed to leave freshly-opened
+     * tabs stuck showing the wrong (light) theme on first open — regardless of the
+     * IDE's actual theme — because `selectNotify` fires as soon as a newly-opened tab
+     * becomes active, which is typically well before JCEF's async page load completes.
+     * Once [ExcalidrawThemeController.isReady] is true, re-pushing is safe and this is a
+     * no-op after disposal (guarded internally by [ExcalidrawThemeController.pushCurrentTheme]).
+     *
+     * Also calls [ExcalidrawJsBridge.triggerCanvasRefresh]: re-pushing the theme alone is
+     * not enough to fix a background tab that already had the correct theme value applied
+     * in its JS state (e.g. via the live [com.intellij.ide.ui.LafManagerListener] push while
+     * it was hidden) but never got a chance to actually repaint its canvas — React bails
+     * out of re-rendering when [ExcalidrawJsBridge.sendThemeUpdate] is called again with an
+     * unchanged value, so no new redraw would otherwise be scheduled. Dispatching a
+     * synthetic `resize` event forces Excalidraw to redraw its canvas unconditionally.
+     */
+    override fun selectNotify() {
+        themeController?.let { controller ->
+            if (controller.isReady) {
+                controller.pushCurrentTheme()
+                bridge.triggerCanvasRefresh()
+            }
+        }
+    }
+
     // -------------------------------------------------------------------------
     // FileEditor contract — modification and validity stubs
     // -------------------------------------------------------------------------

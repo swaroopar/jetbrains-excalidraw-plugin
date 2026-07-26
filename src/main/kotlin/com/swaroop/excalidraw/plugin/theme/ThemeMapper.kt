@@ -3,20 +3,28 @@ package com.swaroop.excalidraw.plugin.theme
 import com.intellij.ide.ui.LafManager
 
 /**
- * ThemeMapper — pure mapping from IDE LookAndFeel name to Excalidraw theme string.
+ * ThemeMapper — pure mapping from IDE theme state to Excalidraw theme string.
  *
  * AC-E4-01: Maps the active IDE theme (light/dark) to the Excalidraw "light"/"dark"
  * theme value, enabling the editor to open in the correct theme without user input.
  *
  * Design decisions:
  * - [lafToExcalidrawTheme] takes a nullable String so it can be unit-tested without
- *   any IDE runtime (no ApplicationManager dependency).
- * - [currentExcalidrawTheme] reads from [LafManager] at runtime and delegates to
- *   [lafToExcalidrawTheme] so the mapping logic is always exercised through a single
- *   tested code path.
- * - Heuristic: "dark" and "darcula" (case-insensitive) indicate a dark theme.
- *   "contrast" (case-insensitive) also indicates a dark theme because JetBrains
- *   High Contrast themes are dark-background variants.
+ *   any IDE runtime (no ApplicationManager dependency). It remains as a fallback
+ *   heuristic for platform builds/tests where the richer theme API is unavailable.
+ * - [currentExcalidrawTheme] prefers [LafManager.getInstance().currentUIThemeLookAndFeel]
+ *   `.isDark` — the platform's own authoritative dark/light flag (used internally by
+ *   IntelliJ for icon/UI dark-mode decisions) — because under the modern "New UI"
+ *   theme system, [LafManager.getCurrentLookAndFeel]'s `name` (legacy `UIManager
+ *   .LookAndFeelInfo`) does NOT reliably reflect the active color theme: many themes
+ *   (custom marketplace themes, "Islands" variants, etc.) install under a generic LaF
+ *   name that never contains "dark"/"darcula"/"contrast", which was observed to leave
+ *   the canvas permanently stuck in light mode regardless of the IDE's actual theme.
+ *   `isDark` has no such naming ambiguity — it is a direct boolean on the currently
+ *   installed theme descriptor.
+ * - [lafToExcalidrawTheme]'s name-substring heuristic ("dark", "darcula", "contrast")
+ *   is retained only as a fallback for the (rare/older-platform) case where
+ *   `currentUIThemeLookAndFeel` is unavailable or null.
  * - Fallback: null or unrecognised → "light" (safe default, no crash).
  *
  * A03: no user-controlled string is executed as code; this object performs only
@@ -34,7 +42,8 @@ object ThemeMapper {
      *
      * Returns "light" for null input or any name not matching the dark heuristics.
      *
-     * No IDE runtime is required; safe to call from unit tests.
+     * No IDE runtime is required; safe to call from unit tests. This is only a
+     * fallback — see [currentExcalidrawTheme] for the primary, name-independent path.
      */
     fun lafToExcalidrawTheme(lafName: String?): String {
         if (lafName == null) return "light"
@@ -47,16 +56,34 @@ object ThemeMapper {
     }
 
     /**
-     * Returns the Excalidraw theme string matching the currently active IDE LookAndFeel.
+     * Returns the Excalidraw theme string matching the currently active IDE theme.
      *
-     * Reads [LafManager.getInstance().currentLookAndFeel?.name] and delegates to
-     * [lafToExcalidrawTheme]. Falls back to "light" when [LafManager] is not yet
-     * initialised (e.g. in headless test mode).
+     * Primary path: [LafManager.getInstance().currentUIThemeLookAndFeel.isDark] — the
+     * platform's own authoritative, name-independent dark/light flag. This is what
+     * IntelliJ itself uses internally to decide dark-mode rendering, so it is correct
+     * regardless of the active theme's display name (unlike the legacy
+     * `currentLookAndFeel.name` substring heuristic below).
+     *
+     * Fallback path (only used if `currentUIThemeLookAndFeel` is null, e.g. an older
+     * platform build or before the IDE's theme subsystem is fully initialised): reads
+     * [LafManager.getInstance().currentLookAndFeel?.name] and delegates to
+     * [lafToExcalidrawTheme].
+     *
+     * Falls back to "light" when [LafManager] itself is not yet initialised (e.g. in
+     * headless test mode).
      *
      * Must only be called from a context where the IDE Application is initialised
      * (e.g. from the EDT or a platform-aware test fixture).
      */
     fun currentExcalidrawTheme(): String {
+        val isDarkResult = runCatching {
+            LafManager.getInstance()?.currentUIThemeLookAndFeel?.isDark
+        }
+        val isDark = isDarkResult.getOrNull()
+        if (isDark != null) {
+            return if (isDark) "dark" else "light"
+        }
+
         val lafName = runCatching {
             LafManager.getInstance()?.currentLookAndFeel?.name
         }.getOrNull()

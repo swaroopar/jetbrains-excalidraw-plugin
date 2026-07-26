@@ -94,6 +94,21 @@ class ExcalidrawThemeController(
     }
 
     /**
+     * True once the initial [pushCurrentTheme] call (from the loadEnd callback) has
+     * happened — i.e. `window.__excalidrawSetTheme__` is guaranteed to be defined on
+     * the page and it is safe to push again on demand (e.g. from
+     * [com.swaroop.excalidraw.plugin.editor.ExcalidrawFileEditor.selectNotify]).
+     *
+     * Calling [pushCurrentTheme] before the real loadEnd has fired injects
+     * `__excalidrawSetTheme__(...)` into a page that has not navigated/rendered yet,
+     * which is unreliable (and was observed to leave the canvas stuck on the wrong
+     * theme on first open) — callers other than the loadEnd callback itself must
+     * check [isReady] before re-pushing.
+     */
+    val isReady: Boolean
+        get() = ready
+
+    /**
      * Called by the listener when the IDE LookAndFeel changes (AC-E4-02).
      * No-op before [pushCurrentTheme] is called (ready-guard) or after [dispose].
      */

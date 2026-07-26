@@ -143,6 +143,37 @@ class ExcalidrawJsBridge private constructor(
     }
 
     /**
+     * Forces the Excalidraw canvas to repaint by dispatching a synthetic `resize`
+     * event on `window`.
+     *
+     * Rationale: JCEF's embedded Chromium instance follows the OS's native
+     * occlusion/visibility notifications (macOS `NSView` occlusion, etc.) to save
+     * CPU — while a tab's browser view is covered by another (non-selected editor
+     * tab), Chromium throttles/suspends `requestAnimationFrame`-driven rendering.
+     * A React state update delivered while occluded (e.g. a live IDE theme-switch
+     * push to a background tab) can update the page's JS state correctly without
+     * ever producing a visible repaint, and — because the underlying
+     * `requestAnimationFrame` redraw this triggers is silently dropped rather than
+     * merely deferred — simply making the tab visible again does not reliably
+     * repaint it. Re-sending the *same* theme value once visible again
+     * (see [selectNotify][com.swaroop.excalidraw.plugin.editor.ExcalidrawFileEditor.selectNotify])
+     * is also insufficient on its own: React bails out of re-rendering when
+     * `setState` receives an unchanged value, so no new redraw gets scheduled.
+     *
+     * A synthetic `resize` event is a robust, library-agnostic way to force a
+     * canvas-based app to redraw regardless of any of the above — Excalidraw
+     * already listens for `resize` to keep the canvas in sync with its container,
+     * so dispatching one on demand reuses that existing, well-tested code path
+     * instead of reaching into Excalidraw-internal render APIs.
+     *
+     * After [dispose] this is a no-op.
+     */
+    fun triggerCanvasRefresh() {
+        if (disposed) return
+        injector("window.dispatchEvent(new Event('resize'));")
+    }
+
+    /**
      * Injects a JS call to `window.__excalidrawAddLibrary__` with a JSON array of
      * Excalidraw library items (parsed/normalised by the Kotlin side from a fetched
      * `.excalidrawlib`). The JS side merges them via excalidrawAPI.updateLibrary.
