@@ -88,11 +88,7 @@ class ExcalidrawJcefHost private constructor(
          */
         internal fun startUrlWithTheme(): String {
             val theme = ThemeMapper.currentExcalidrawTheme()
-            val url = "$START_URL?theme=$theme"
-            // TEMPORARY diagnostic logging (task: theme-switch bug investigation) —
-            // remove once root cause of "fresh files open in wrong theme" is confirmed.
-            LOG.warn("Excalidraw [theme-diagnostic] startUrlWithTheme computed theme='$theme' url='$url'")
-            return url
+            return "$START_URL?theme=$theme"
         }
 
         /**
@@ -177,25 +173,6 @@ class ExcalidrawJcefHost private constructor(
             if (System.getProperty("excalidraw.devtools") == "true") {
                 browser.openDevtools()
             }
-            // TEMPORARY diagnostic (task: theme-switch bug investigation) — forwards the
-            // page's console.log/warn/error output into idea.log, so the JS-side theme
-            // detection can be inspected without needing the DevTools popup to work.
-            // Remove once root cause of "fresh files open in wrong theme" is confirmed.
-            browser.jbCefClient?.addDisplayHandler(
-                object : org.cef.handler.CefDisplayHandlerAdapter() {
-                    override fun onConsoleMessage(
-                        cefBrowser: CefBrowser?,
-                        level: org.cef.CefSettings.LogSeverity?,
-                        message: String?,
-                        source: String?,
-                        line: Int
-                    ): Boolean {
-                        LOG.warn("Excalidraw [js-console] [$level] $message (at $source:$line)")
-                        return false
-                    }
-                },
-                browser.cefBrowser
-            )
             return host
         }
 
@@ -412,58 +389,6 @@ class ExcalidrawJcefHost private constructor(
                     // Only fire for the main frame (frame.isMain guarantees we don't
                     // react to sub-frame loads such as iframes — A03: no injection via sub-frames).
                     if (frame?.isMain == true) {
-                        // TEMPORARY diagnostic (task: theme-switch bug investigation) —
-                        // logs what the PAGE itself sees for the theme query param, to
-                        // rule in/out a JS-side parsing issue vs. the already-confirmed-
-                        // correct Kotlin-side theme computation. Remove once root cause
-                        // of "fresh files open in wrong theme" is confirmed.
-                        cefBrowser?.executeJavaScript(
-                            "console.log('[excalidraw-diagnostic] href=' + window.location.href + " +
-                                "' search=' + window.location.search + " +
-                                "' parsedTheme=' + new URLSearchParams(window.location.search).get('theme'));",
-                            cefBrowser.url,
-                            0
-                        )
-                        // TEMPORARY diagnostic (task: theme-switch bug investigation) —
-                        // the URL/query-param plumbing is now confirmed correct end-to-end,
-                        // yet the canvas is still reported as visually light. This checks
-                        // whether Excalidraw's own DOM actually reflects the dark theme
-                        // (class list / data-theme attribute / computed background) a couple
-                        // of seconds after load, to rule in/out a rendering-only issue (e.g.
-                        // stale cached bundle.js/css) versus a React-state issue. Remove once
-                        // root cause is confirmed.
-                        cefBrowser?.executeJavaScript(
-                            "setTimeout(function() {" +
-                                "  var el = document.querySelector('.excalidraw');" +
-                                "  console.log('[excalidraw-diagnostic-dom] found=' + !!el +" +
-                                "    ' class=' + (el ? el.className : 'n/a') +" +
-                                "    ' dataTheme=' + (el ? el.getAttribute('data-theme') : 'n/a') +" +
-                                "    ' bg=' + (el ? getComputedStyle(el).backgroundColor : 'n/a') +" +
-                                "    ' bodyBg=' + getComputedStyle(document.body).backgroundColor +" +
-                                "    ' hasSetTheme=' + (typeof window.__excalidrawSetTheme__));" +
-                                "}, 2000);",
-                            cefBrowser.url,
-                            0
-                        )
-                        // TEMPORARY diagnostic (task: theme-switch bug investigation) —
-                        // reads Excalidraw's OWN internal appState.theme directly via the
-                        // API instance (exposed globally by index.jsx for this purpose),
-                        // to see whether it ever picks up the theme prop we pass in (which
-                        // has separately been confirmed to be "dark" on every render).
-                        // Remove once root cause is confirmed.
-                        cefBrowser?.executeJavaScript(
-                            "[50, 200, 500, 1000, 2000, 4000].forEach(function(delay) {" +
-                                "  setTimeout(function() {" +
-                                "    var api = window.__excalidrawDebugAPI__;" +
-                                "    var appState = api ? api.getAppState() : null;" +
-                                "    console.log('[excalidraw-diagnostic-appstate] t=' + delay +" +
-                                "      'ms hasApi=' + !!api +" +
-                                "      ' appStateTheme=' + (appState ? appState.theme : 'n/a'));" +
-                                "  }, delay);" +
-                                "});",
-                            cefBrowser.url,
-                            0
-                        )
                         fireLoadEnd()
                     }
                 }

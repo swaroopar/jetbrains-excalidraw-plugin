@@ -87,13 +87,6 @@ function App() {
   var theme = themeState[0];
   var setTheme = themeState[1];
 
-  // TEMPORARY diagnostic (task: theme-switch bug investigation) — logs the
-  // actual `theme` value this component passes to <Excalidraw theme={theme}>
-  // on every render, so we can confirm whether the wrapper's own React state
-  // ever holds anything other than "dark" when the IDE is dark. Remove once
-  // root cause of "fresh files open in wrong theme" is confirmed.
-  console.log("[excalidraw-diagnostic-prop] rendering with theme=" + theme);
-
   /**
    * excalidrawAPIRef — holds the Excalidraw API instance once the component mounts.
    * Used by window.__excalidrawExport__ to access scene elements, app state, and files.
@@ -112,6 +105,51 @@ function App() {
     window.__excalidrawSetTheme__ = function (newTheme) {
       if (VALID_THEMES.indexOf(newTheme) !== -1) {
         setTheme(newTheme);
+      }
+    };
+
+    /**
+     * window.__excalidrawLoadScene__(json) — Kotlin->JS channel that loads a
+     * persisted .excalidraw scene (elements + appState + files) into the canvas.
+     *
+     * json is `{"type":"loadScene","scene":{...ExcalidrawScene...}}`, produced by
+     * BridgeMessage.LoadScene.toJson() and called once per file open, right after
+     * installReturnChannel() (loadScene) and before the initial pushCurrentTheme()
+     * call.
+     *
+     * Theme handling: the saved scene's own appState.theme reflects whatever mode
+     * the file happened to be in when it was last saved (often "light", since
+     * that's Excalidraw's own default) -- it must NOT override the theme the IDE
+     * is currently driving. We explicitly stamp the live appState theme (read
+     * back from the API right before applying) onto the incoming appState so a
+     * scene saved in light mode never regresses an IDE dark-mode session back to
+     * light. This is what fixes existing/previously-saved files always opening in
+     * light mode regardless of the IDE's theme.
+     *
+     * Security (A03): json is parsed via JSON.parse (no eval()); malformed input
+     * is caught and the canvas is simply left as-is (already blank/new) rather
+     * than throwing.
+     */
+    window.__excalidrawLoadScene__ = function (json) {
+      var api = excalidrawAPIRef.current;
+      if (!api) {
+        return;
+      }
+      try {
+        var payload = JSON.parse(json);
+        var scene = (payload && payload.scene) || {};
+        var files = scene.files || {};
+        var fileArray = Object.keys(files).map(function (k) { return files[k]; });
+        if (fileArray.length > 0 && typeof api.addFiles === "function") {
+          try { api.addFiles(fileArray); } catch (e) { /* ignore */ }
+        }
+        var currentTheme = api.getAppState().theme;
+        api.updateScene({
+          elements: scene.elements || [],
+          appState: Object.assign({}, scene.appState || {}, { theme: currentTheme }),
+        });
+      } catch (e) {
+        // Malformed scene JSON: leave the canvas as-is rather than crash.
       }
     };
 
@@ -355,13 +393,6 @@ function App() {
     theme: theme,
     excalidrawAPI: function (api) {
       excalidrawAPIRef.current = api;
-      // TEMPORARY diagnostic (task: theme-switch bug investigation) — exposes the
-      // Excalidraw API instance globally so a delayed diagnostic script can read
-      // getAppState().theme directly, to see whether Excalidraw's OWN internal
-      // appState.theme ever reflects the (confirmed-correct) theme prop we pass
-      // in. Remove once root cause of "fresh files open in wrong theme" is
-      // confirmed.
-      window.__excalidrawDebugAPI__ = api;
     },
     UIOptions: {
       canvasActions: {

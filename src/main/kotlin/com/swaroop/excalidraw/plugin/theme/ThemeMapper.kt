@@ -80,21 +80,13 @@ object ThemeMapper {
             LafManager.getInstance()?.currentUIThemeLookAndFeel?.isDark
         }
         val isDark = isDarkResult.getOrNull()
-        val lafName = runCatching {
-            LafManager.getInstance()?.currentLookAndFeel?.name
-        }.getOrNull()
-        // TEMPORARY diagnostic logging (task: theme-switch bug investigation) —
-        // remove once root cause of "fresh files open in wrong theme" is confirmed.
-        LOG.warn(
-            "Excalidraw [theme-diagnostic] currentUIThemeLookAndFeel.isDark=$isDark " +
-                "(exception=${isDarkResult.exceptionOrNull()}), currentLookAndFeel.name='$lafName'"
-        )
         if (isDark != null) {
             return if (isDark) "dark" else "light"
         }
 
+        val lafName = runCatching {
+            LafManager.getInstance()?.currentLookAndFeel?.name
+        }.getOrNull()
         return lafToExcalidrawTheme(lafName)
     }
-
-    private val LOG = com.intellij.openapi.diagnostic.logger<ThemeMapper>()
 }
