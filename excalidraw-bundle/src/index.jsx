@@ -87,6 +87,13 @@ function App() {
   var theme = themeState[0];
   var setTheme = themeState[1];
 
+  // TEMPORARY diagnostic (task: theme-switch bug investigation) — logs the
+  // actual `theme` value this component passes to <Excalidraw theme={theme}>
+  // on every render, so we can confirm whether the wrapper's own React state
+  // ever holds anything other than "dark" when the IDE is dark. Remove once
+  // root cause of "fresh files open in wrong theme" is confirmed.
+  console.log("[excalidraw-diagnostic-prop] rendering with theme=" + theme);
+
   /**
    * excalidrawAPIRef — holds the Excalidraw API instance once the component mounts.
    * Used by window.__excalidrawExport__ to access scene elements, app state, and files.
