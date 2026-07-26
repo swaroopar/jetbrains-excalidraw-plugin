@@ -93,6 +93,16 @@ function App() {
    */
   var excalidrawAPIRef = React.useRef(null);
 
+  /**
+   * themeRef — always mirrors the current `theme` state (IDE-driven, confirmed
+   * correct on every render). Read by window.__excalidrawLoadScene__ instead of
+   * api.getAppState().theme, because Excalidraw's own internal appState.theme can
+   * independently regress to its own default ("light") by the time the scene-load
+   * bridge call runs, so it is not a trustworthy source of "the current theme".
+   */
+  var themeRef = React.useRef(theme);
+  themeRef.current = theme;
+
   React.useEffect(function () {
     /**
      * window.__excalidrawSetTheme__(newTheme) — Kotlin→JS theme-update channel.
@@ -143,7 +153,7 @@ function App() {
         if (fileArray.length > 0 && typeof api.addFiles === "function") {
           try { api.addFiles(fileArray); } catch (e) { /* ignore */ }
         }
-        var currentTheme = api.getAppState().theme;
+        var currentTheme = themeRef.current;
         api.updateScene({
           elements: scene.elements || [],
           appState: Object.assign({}, scene.appState || {}, { theme: currentTheme }),
@@ -401,6 +411,17 @@ function App() {
       },
     },
     onChange: function (elements, appState) {
+      // Self-healing theme guard: Excalidraw's own internal scene
+      // initialization can asynchronously reset appState.theme back to its
+      // default ("light") shortly after __excalidrawLoadScene__ correctly
+      // applies the IDE's theme (a race with Excalidraw's internal restore
+      // logic, observed even after explicitly stamping the theme on load).
+      // Any onChange callback -- which fires on that internal reset too --
+      // is used to immediately re-assert the authoritative theme so the
+      // canvas can't get stuck showing the wrong one.
+      if (appState && appState.theme !== themeRef.current && excalidrawAPIRef.current) {
+        excalidrawAPIRef.current.updateScene({ appState: { theme: themeRef.current } });
+      }
       var payload = JSON.stringify({ type: "sceneChange", elements: elements, appState: appState });
       sendToKotlin(payload);
     },
