@@ -2,6 +2,7 @@ package com.swaroop.excalidraw.plugin.persistence.document
 
 import com.intellij.openapi.vfs.VirtualFile
 import com.swaroop.excalidraw.plugin.bridge.ExcalidrawJsBridge
+import com.swaroop.excalidraw.plugin.persistence.Scene
 
 /**
  * Owns "how do I load and save this file's scene" for one on-disk scene format.
@@ -27,25 +28,25 @@ interface SceneDocument {
     fun load(file: VirtualFile, bridge: ExcalidrawJsBridge, onResult: (SceneLoadResult) -> Unit)
 
     /**
-     * Persists [sceneJson] — the latest scene content received from the bridge —
-     * to [file], then reports the outcome via [onResult].
+     * Persists [scene] — the latest scene received from the bridge — to [file],
+     * then reports the outcome via [onResult].
      *
      * May complete synchronously (plain JSON write) or asynchronously after a
      * bridge round-trip (PNG re-export).
      */
-    fun save(file: VirtualFile, sceneJson: String, bridge: ExcalidrawJsBridge, onResult: (SceneSaveResult) -> Unit)
+    fun save(file: VirtualFile, scene: Scene, bridge: ExcalidrawJsBridge, onResult: (SceneSaveResult) -> Unit)
 }
 
 /** Outcome of a [SceneDocument.load] call. */
 sealed class SceneLoadResult {
 
     /**
-     * The scene was pushed to the canvas as [sceneJson], and this format's own load
+     * The scene was pushed to the canvas as [scene], and this format's own load
      * protocol has already reconciled the canvas against the file — the caller may
-     * seed its change-detection baseline from [sceneJson] immediately without
+     * seed its change-detection baseline from [scene] immediately without
      * waiting for a render echo.
      */
-    data class LoadedAndBaselined(val sceneJson: String) : SceneLoadResult()
+    data class LoadedAndBaselined(val scene: Scene) : SceneLoadResult()
 
     /**
      * The scene was pushed to the canvas; the canvas will fire its own render/onChange

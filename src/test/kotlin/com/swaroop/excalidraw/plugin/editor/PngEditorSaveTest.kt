@@ -1,7 +1,7 @@
 package com.swaroop.excalidraw.plugin.editor
 
 import com.swaroop.excalidraw.plugin.bridge.ExcalidrawJsBridge
-import com.swaroop.excalidraw.plugin.bridge.SceneChangeMessage
+import com.swaroop.excalidraw.plugin.persistence.Scene
 import com.swaroop.excalidraw.plugin.editor.autosave.ManualScheduler
 import com.swaroop.excalidraw.plugin.jcef.ExcalidrawJcefHost
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawPersistenceService
@@ -44,7 +44,7 @@ class PngEditorSaveTest {
         var writtenPngBytes: ByteArray? = null
         var writeSceneCallCount: Int = 0
 
-        override fun writeScene(file: VirtualFile, json: String) {
+        override fun writeScene(file: VirtualFile, scene: Scene) {
             writeSceneCallCount++
         }
 
@@ -97,7 +97,7 @@ class PngEditorSaveTest {
         val capturedJs = mutableListOf<String>()
         val bridge = ExcalidrawJsBridge.createForTest(
             injector = { js -> capturedJs.add(js) },
-            sceneChangeHandler = { scene: SceneChangeMessage ->
+            sceneChangeHandler = { scene: Scene ->
                 editorHolder?.onSceneChanged(scene)
             }
         )
@@ -166,7 +166,7 @@ class PngEditorSaveTest {
         var editorHolder: ExcalidrawFileEditor? = null
         val bridgeForScene = ExcalidrawJsBridge.createForTest(
             injector = { js -> capturedJs.add(js) },
-            sceneChangeHandler = { scene: SceneChangeMessage ->
+            sceneChangeHandler = { scene: Scene ->
                 editorHolder?.onSceneChanged(scene)
             }
         )
@@ -300,7 +300,7 @@ class PngEditorSaveTest {
 
         val bridge = ExcalidrawJsBridge.createForTest(
             injector = { _ -> },
-            sceneChangeHandler = { scene: SceneChangeMessage ->
+            sceneChangeHandler = { scene: Scene ->
                 editorHolder?.onSceneChanged(scene)
             }
         )
@@ -364,7 +364,7 @@ class PngEditorSaveTest {
 
         val bridge = ExcalidrawJsBridge.createForTest(
             injector = { _ -> },
-            sceneChangeHandler = { scene: SceneChangeMessage ->
+            sceneChangeHandler = { scene: Scene ->
                 editorHolder?.onSceneChanged(scene)
             }
         )
@@ -430,7 +430,7 @@ class PngEditorSaveTest {
 
         val bridge = ExcalidrawJsBridge.createForTest(
             injector = { _ -> },
-            sceneChangeHandler = { scene: SceneChangeMessage ->
+            sceneChangeHandler = { scene: Scene ->
                 editorHolder?.onSceneChanged(scene)
             }
         )

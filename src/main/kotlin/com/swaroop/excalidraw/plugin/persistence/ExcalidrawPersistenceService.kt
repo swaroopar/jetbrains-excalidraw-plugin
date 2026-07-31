@@ -1,8 +1,5 @@
 package com.swaroop.excalidraw.plugin.persistence
 
-import com.google.gson.JsonParseException
-import com.google.gson.JsonSyntaxException
-import com.google.gson.Gson
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.editor.Document
@@ -16,8 +13,8 @@ import com.intellij.openapi.diagnostic.Logger
  *
  * Secure-coding notes (A03 / A08):
  * - Uses Gson as the established, vetted JSON parser — no eval() or dynamic code.
- * - Validates mandatory fields (type, elements, appState) before returning a scene.
- * - Rejects type != "excalidraw", empty content, and malformed JSON early.
+ * - Validates mandatory fields (type, elements, appState) before returning a scene
+ *   (see [Scene.parseFile]).
  * - Write path uses IDE Document/VFS API exclusively — no java.io.File, no NIO.
  * - WriteAction ensures undo-buffer participation and IDE modified-state tracking.
  *
@@ -29,43 +26,42 @@ open class ExcalidrawPersistenceService {
         private val LOG: Logger = Logger.getInstance(ExcalidrawPersistenceService::class.java)
     }
 
-    private val gson = Gson()
-
     /**
-     * Reads the content of [file] and parses it as an Excalidraw scene JSON document.
+     * Reads the content of [file] and parses it as an Excalidraw [Scene].
      *
      * When called in a running IntelliJ application, VFS byte access is wrapped in a
      * [ReadAction] to satisfy the platform's threading model. In unit-test contexts
      * where no Application is initialised, bytes are read directly.
      *
      * @param file the VirtualFile to read; must be a UTF-8 encoded `.excalidraw` file.
-     * @return a fully populated [ExcalidrawScene] if parsing succeeds.
+     * @return a fully populated [Scene] if parsing succeeds.
      * @throws ExcalidrawParseException if the content is empty, is not valid JSON,
      *         or is missing mandatory fields (elements, appState).
      */
-    fun readScene(file: VirtualFile): ExcalidrawScene {
+    fun readScene(file: VirtualFile): Scene {
         val filePath = file.path
-        val content: String = readContent(file, filePath)
-        return parseScene(content, filePath)
+        val content: String = readContent(file)
+        return Scene.parseFile(content, filePath)
     }
 
     /**
      * Like [readScene], but treats an empty / blank file as a NEW blank drawing
-     * ([ExcalidrawScene.newEmpty]) instead of throwing.
+     * ([Scene.empty]) instead of throwing.
      *
      * This is the entry point the editor uses when opening a file, so that creating a
      * fresh `.excalidraw` (which starts empty) opens a usable blank canvas rather than a
      * parse-error notification. Non-empty but malformed content still throws
      * [ExcalidrawParseException] so genuine corruption is surfaced.
      */
-    fun readSceneOrNew(file: VirtualFile): ExcalidrawScene {
+    fun readSceneOrNew(file: VirtualFile): Scene {
         val filePath = file.path
-        val content: String = readContent(file, filePath)
-        return if (content.isBlank()) ExcalidrawScene.newEmpty() else parseScene(content, filePath)
+        val content: String = readContent(file)
+        return if (content.isBlank()) Scene.empty() else Scene.parseFile(content, filePath)
     }
 
     /**
-     * Writes [json] to [file] exclusively through the IDE Document / VFS API.
+     * Writes [scene]'s canonical JSON ([Scene.toCanonicalJson]) to [file] exclusively
+     * through the IDE Document / VFS API.
      *
      * The write is performed inside a [com.intellij.openapi.application.Application.runWriteAction]
      * block so it participates in the IDE undo-buffer and modified-state tracking
@@ -77,9 +73,9 @@ open class ExcalidrawPersistenceService {
      * the platform's VFS layer.
      *
      * @param file the VirtualFile to write; must be writable.
-     * @param json the canonical `.excalidraw` JSON string to persist.
+     * @param scene the scene to persist.
      */
-    open fun writeScene(file: VirtualFile, json: String) {
+    open fun writeScene(file: VirtualFile, scene: Scene) {
         val app = ApplicationManager.getApplication()
         if (app == null) {
             // Headless / plain-JUnit context: no Application available.
@@ -95,7 +91,7 @@ open class ExcalidrawPersistenceService {
         }
 
         app.runWriteAction {
-            writeSceneToDocument(document, json)
+            writeSceneToDocument(document, scene.toCanonicalJson())
             FileDocumentManager.getInstance().saveDocument(document)
         }
     }
@@ -158,7 +154,7 @@ open class ExcalidrawPersistenceService {
      * Reads raw bytes from [file], using [ReadAction] when an IntelliJ Application
      * instance is available, or direct byte access in test contexts.
      */
-    private fun readContent(file: VirtualFile, filePath: String): String {
+    private fun readContent(file: VirtualFile): String {
         val bytes: ByteArray = if (ApplicationManager.getApplication() != null) {
             ReadAction.compute<ByteArray, Throwable> { file.contentsToByteArray() }
         } else {
@@ -166,102 +162,5 @@ open class ExcalidrawPersistenceService {
             file.contentsToByteArray()
         }
         return bytes.toString(Charsets.UTF_8)
-    }
-
-    /**
-     * Parses a raw JSON [content] string into an [ExcalidrawScene].
-     *
-     * Validates mandatory fields (elements, appState) and rejects empty or
-     * malformed input early (A03: whitelist validation; A08: schema enforcement).
-     *
-     * @throws ExcalidrawParseException on any parse or validation failure.
-     */
-    private fun parseScene(content: String, filePath: String): ExcalidrawScene {
-        if (content.isBlank()) {
-            throw ExcalidrawParseException(
-                filePath,
-                IllegalArgumentException("File content is empty")
-            )
-        }
-
-        // Parse top-level JSON into a raw map. JsonSyntaxException signals malformed JSON.
-        @Suppress("UNCHECKED_CAST")
-        val rawMap: Map<String, Any?> = try {
-            gson.fromJson(content, Map::class.java) as? Map<String, Any?>
-                ?: throw JsonParseException("Top-level JSON element is not an object")
-        } catch (ex: JsonSyntaxException) {
-            throw ExcalidrawParseException(filePath, ex)
-        } catch (ex: JsonParseException) {
-            throw ExcalidrawParseException(filePath, ex)
-        }
-
-        // Validate mandatory field: elements (A03 — reject if absent or wrong type)
-        val elementsRaw = rawMap["elements"]
-            ?: throw ExcalidrawParseException(
-                filePath,
-                IllegalArgumentException("Missing mandatory field: elements")
-            )
-        if (elementsRaw !is List<*>) {
-            throw ExcalidrawParseException(
-                filePath,
-                IllegalArgumentException("Field 'elements' must be a JSON array")
-            )
-        }
-
-        // Validate mandatory field: appState (A03 — reject if absent or wrong type)
-        val appStateRaw = rawMap["appState"]
-            ?: throw ExcalidrawParseException(
-                filePath,
-                IllegalArgumentException("Missing mandatory field: appState")
-            )
-        if (appStateRaw !is Map<*, *>) {
-            throw ExcalidrawParseException(
-                filePath,
-                IllegalArgumentException("Field 'appState' must be a JSON object")
-            )
-        }
-
-        // Validate type field equals "excalidraw" (A03: whitelist; A08: schema enforcement).
-        val type = (rawMap["type"] as? String) ?: ""
-        if (type != "excalidraw") {
-            throw ExcalidrawParseException(
-                filePath,
-                IllegalArgumentException("Field 'type' must be \"excalidraw\", got: \"$type\"")
-            )
-        }
-
-        val version = when (val v = rawMap["version"]) {
-            is Double -> v.toInt()
-            is Int -> v
-            is Long -> v.toInt()
-            is Number -> v.toInt()
-            else -> 0
-        }
-        val source = rawMap["source"] as? String
-
-        @Suppress("UNCHECKED_CAST")
-        val elements = elementsRaw.filterIsInstance<Map<String, Any>>()
-
-        // Safe defensive cast: build a Map<String, Any> from the validated Map<*, *>,
-        // filtering out any entry whose key is not a String (defensive; Gson always
-        // produces String keys, but we reject rather than silently drop bad input).
-        val appState: Map<String, Any> = appStateRaw
-            .entries
-            .mapNotNull { (k, v) ->
-                if (k is String && v != null) k to v else null
-            }
-            .toMap()
-
-        @Suppress("UNCHECKED_CAST")
-        val files = rawMap["files"] as? Map<String, Any>
-
-        return ExcalidrawScene(
-            type = type,
-            version = version,
-            source = source,
-            elements = elements,
-            appState = appState,
-            files = files
-        )
     }
 }

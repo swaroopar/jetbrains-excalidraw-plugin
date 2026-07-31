@@ -4,7 +4,7 @@ import com.intellij.openapi.vfs.VirtualFile
 import com.swaroop.excalidraw.plugin.bridge.ExcalidrawJsBridge
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawParseException
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawPersistenceService
-import com.swaroop.excalidraw.plugin.persistence.ExcalidrawSerializer
+import com.swaroop.excalidraw.plugin.persistence.Scene
 
 /**
  * [SceneDocument] adapter for plain `.excalidraw` JSON files.
@@ -17,8 +17,6 @@ import com.swaroop.excalidraw.plugin.persistence.ExcalidrawSerializer
 class JsonSceneDocument(
     private val persistenceService: ExcalidrawPersistenceService
 ) : SceneDocument {
-
-    private val serializer: ExcalidrawSerializer = ExcalidrawSerializer()
 
     override fun load(file: VirtualFile, bridge: ExcalidrawJsBridge, onResult: (SceneLoadResult) -> Unit) {
         try {
@@ -35,12 +33,11 @@ class JsonSceneDocument(
 
     override fun save(
         file: VirtualFile,
-        sceneJson: String,
+        scene: Scene,
         bridge: ExcalidrawJsBridge,
         onResult: (SceneSaveResult) -> Unit
     ) {
-        val normalized = serializer.serialize(sceneJson)
-        persistenceService.writeScene(file, normalized)
+        persistenceService.writeScene(file, scene)
         onResult(SceneSaveResult.Saved)
     }
 }

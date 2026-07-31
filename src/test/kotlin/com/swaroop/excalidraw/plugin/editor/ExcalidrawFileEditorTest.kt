@@ -3,7 +3,6 @@ package com.swaroop.excalidraw.plugin.editor
 import com.swaroop.excalidraw.plugin.bridge.ExcalidrawJsBridge
 import com.swaroop.excalidraw.plugin.jcef.ExcalidrawJcefHost
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawPersistenceService
-import com.swaroop.excalidraw.plugin.persistence.ExcalidrawScene
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -54,7 +53,7 @@ class ExcalidrawFileEditorTest {
 
     /**
      * AC-E1-01: Opening a valid .excalidraw file causes bridge.loadScene to be
-     * called with the correctly parsed ExcalidrawScene.
+     * called with the correctly parsed Scene.
      *
      * The test uses the createForTest factory to inject:
      * - A stub JcefHost that fires loadEnd synchronously.

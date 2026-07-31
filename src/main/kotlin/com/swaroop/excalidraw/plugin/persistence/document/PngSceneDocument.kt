@@ -6,6 +6,7 @@ import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.vfs.VirtualFile
 import com.swaroop.excalidraw.plugin.bridge.ExcalidrawJsBridge
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawPersistenceService
+import com.swaroop.excalidraw.plugin.persistence.Scene
 
 /**
  * [SceneDocument] adapter for scene-embedded `.excalidraw.png` files.
@@ -45,10 +46,11 @@ class PngSceneDocument(
                             "(${msg.error}) — opening as a new blank drawing"
                     )
                     extracted = true
-                    onResult(SceneLoadResult.LoadedAndBaselined(EMPTY_SCENE_JSON))
+                    onResult(SceneLoadResult.LoadedAndBaselined(Scene.empty()))
                 } else {
                     extracted = true
-                    onResult(SceneLoadResult.LoadedAndBaselined(msg.sceneJson ?: EMPTY_SCENE_JSON))
+                    val scene = msg.sceneJson?.let { Scene.fromLenientJson(it) } ?: Scene.empty()
+                    onResult(SceneLoadResult.LoadedAndBaselined(scene))
                 }
             }
             if (application != null) {
@@ -63,7 +65,7 @@ class PngSceneDocument(
 
     override fun save(
         file: VirtualFile,
-        sceneJson: String,
+        scene: Scene,
         bridge: ExcalidrawJsBridge,
         onResult: (SceneSaveResult) -> Unit
     ) {
@@ -91,17 +93,10 @@ class PngSceneDocument(
             }
         }
 
-        bridge.requestPngExport(sceneJson)
+        bridge.requestPngExport(scene.toCanonicalJson())
     }
 
     companion object {
         private val LOG: Logger = Logger.getInstance(PngSceneDocument::class.java)
-
-        /**
-         * Canonical empty Excalidraw scene used when a `.excalidraw.png` is opened with no
-         * embedded scene (it becomes a fresh, savable blank drawing).
-         */
-        const val EMPTY_SCENE_JSON: String =
-            """{"type":"excalidraw","version":2,"elements":[],"appState":{},"files":{}}"""
     }
 }

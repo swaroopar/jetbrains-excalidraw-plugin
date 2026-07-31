@@ -65,11 +65,11 @@ class ExcalidrawPersistenceServiceTest {
         StubVirtualFile(name, content.toByteArray(Charsets.UTF_8))
 
     // ---------------------------------------------------------------------------
-    // TC-01: valid JSON returns ExcalidrawScene with correct fields
+    // TC-01: valid JSON returns Scene with correct fields
     // ---------------------------------------------------------------------------
 
     @Test
-    fun `valid JSON fixture returns ExcalidrawScene with correct fields`() {
+    fun `valid JSON fixture returns Scene with correct fields`() {
         val vf = stubFromResource("fixtures/valid-scene.excalidraw")
 
         val scene = service.readScene(vf)
@@ -78,8 +78,8 @@ class ExcalidrawPersistenceServiceTest {
         assertEquals("excalidraw", scene.type)
         assertEquals(2, scene.version)
         assertEquals("https://excalidraw.com", scene.source)
-        assertEquals(1, scene.elements.size)
-        assertEquals("el1", scene.elements[0]["id"] as? String)
+        assertEquals(1, scene.elements.size())
+        assertEquals("el1", scene.elements[0].asJsonObject.get("id").asString)
         assertNotNull(scene.appState)
     }
 
@@ -163,7 +163,7 @@ class ExcalidrawPersistenceServiceTest {
         val scene = service.readSceneOrNew(vf)
 
         assertEquals("excalidraw", scene.type)
-        assertEquals(0, scene.elements.size)
+        assertEquals(0, scene.elements.size())
         assertNotNull(scene.appState)
     }
 
@@ -174,7 +174,7 @@ class ExcalidrawPersistenceServiceTest {
         val scene = service.readSceneOrNew(vf)
 
         assertEquals("excalidraw", scene.type)
-        assertEquals(0, scene.elements.size)
+        assertEquals(0, scene.elements.size())
     }
 
     @Test
@@ -184,7 +184,7 @@ class ExcalidrawPersistenceServiceTest {
         val scene = service.readSceneOrNew(vf)
 
         assertEquals("excalidraw", scene.type)
-        assertEquals(1, scene.elements.size)
+        assertEquals(1, scene.elements.size())
     }
 
     @Test

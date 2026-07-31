@@ -124,7 +124,7 @@ class ExcalidrawPersistenceServiceWriteTest {
         val json = """{"type":"excalidraw","version":2,"source":null,"elements":[],"appState":{},"files":null}"""
 
         // Must not throw; no Document is registered for vf in plain JUnit context.
-        service.writeScene(vf, json)
+        service.writeScene(vf, Scene.parseFile(json, vf.path))
     }
 
     // -------------------------------------------------------------------------
@@ -296,7 +296,7 @@ class ExcalidrawPersistenceServiceWriteTest {
         // so writeScene must log a warning and return without any exception.
         var thrownException: Throwable? = null
         try {
-            service.writeScene(vf, json)
+            service.writeScene(vf, Scene.parseFile(json, vf.path))
         } catch (ex: Throwable) {
             thrownException = ex
         }

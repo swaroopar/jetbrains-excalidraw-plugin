@@ -1,7 +1,7 @@
 package com.swaroop.excalidraw.plugin.editor
 
 import com.swaroop.excalidraw.plugin.bridge.ExcalidrawJsBridge
-import com.swaroop.excalidraw.plugin.bridge.SceneChangeMessage
+import com.swaroop.excalidraw.plugin.persistence.Scene
 import com.swaroop.excalidraw.plugin.jcef.ExcalidrawJcefHost
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawPersistenceService
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -59,7 +59,7 @@ class ExcalidrawFileEditorEditTest {
 
         val bridge = ExcalidrawJsBridge.createForTest(
             injector = { _ -> },
-            sceneChangeHandler = { scene: SceneChangeMessage ->
+            sceneChangeHandler = { scene: Scene ->
                 editorHolder?.onSceneChanged(scene)
             }
         )

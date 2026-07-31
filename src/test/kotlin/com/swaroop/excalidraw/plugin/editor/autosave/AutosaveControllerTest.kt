@@ -2,6 +2,7 @@ package com.swaroop.excalidraw.plugin.editor.autosave
 
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
+import com.swaroop.excalidraw.plugin.persistence.Scene
 import com.swaroop.excalidraw.plugin.persistence.document.SceneSaveResult
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -11,30 +12,52 @@ import org.junit.jupiter.api.Test
 /**
  * Unit tests for [AutosaveController] — no [com.swaroop.excalidraw.plugin.editor.ExcalidrawFileEditor],
  * no bridge, no persistence subclassing. Exercises the controller directly through its own
- * interface with a [ManualScheduler] and a fake `write` callback.
+ * interface with a [ManualScheduler] and a fake `write` callback, using [Scene] fixtures.
  */
 class AutosaveControllerTest {
 
-    private fun rectangle(id: String): JsonObject = JsonObject().apply { addProperty("id", id) }
+    private fun sceneOf(vararg ids: String): Scene = Scene(
+        type = "excalidraw",
+        version = 2,
+        source = null,
+        elements = JsonArray().apply { ids.forEach { add(JsonObject().apply { addProperty("id", it) }) } },
+        appState = JsonObject(),
+        files = null
+    )
 
-    private fun elementsOf(vararg ids: String): JsonArray = JsonArray().apply {
-        ids.forEach { add(rectangle(it)) }
-    }
+    /** Same element ids as [sceneOf] but with churn fields added — must be content-equal. */
+    private fun churnedSceneOf(vararg ids: String): Scene = Scene(
+        type = "excalidraw",
+        version = 2,
+        source = null,
+        elements = JsonArray().apply {
+            ids.forEach {
+                add(JsonObject().apply {
+                    addProperty("id", it)
+                    addProperty("version", 7)
+                    addProperty("versionNonce", 12345)
+                    addProperty("updated", 999999L)
+                })
+            }
+        },
+        appState = JsonObject(),
+        files = null
+    )
 
     private class Harness {
         val scheduler = ManualScheduler()
         val modifiedEvents = mutableListOf<Boolean>()
         var writeCallCount = 0
-        var lastWrittenJson: String? = null
+        var lastWrittenScene: Scene? = null
         var nextWriteResult: SceneSaveResult = SceneSaveResult.Saved
 
         val controller = AutosaveController(
             scheduler = scheduler,
             debounceMs = 500L,
             onModifiedChanged = { modifiedEvents.add(it) },
-            write = { json, onResult ->
+            write = { scene, onResult ->
                 writeCallCount++
-                lastWrittenJson = json
+                lastWrittenScene = scene
                 onResult(nextWriteResult)
             }
         )
@@ -48,10 +71,10 @@ class AutosaveControllerTest {
     fun `onSceneChanged is dropped entirely before arm or awaitEcho`() {
         val h = Harness()
 
-        h.controller.onSceneChanged("""{"elements":[]}""", elementsOf("a"))
+        h.controller.onSceneChanged(sceneOf("a"))
 
         assertFalse(h.controller.isModified)
-        assertEquals(null, h.controller.currentSceneJson)
+        assertEquals(null, h.controller.currentScene)
         assertEquals(0, h.writeCallCount)
     }
 
@@ -64,29 +87,31 @@ class AutosaveControllerTest {
         val h = Harness()
         h.controller.awaitEcho()
 
-        h.controller.onSceneChanged("""{"elements":[{"id":"a"}]}""", elementsOf("a"))
+        val scene = sceneOf("a")
+        h.controller.onSceneChanged(scene)
 
         assertFalse(h.controller.isModified, "the load echo must not count as an edit")
-        assertEquals("""{"elements":[{"id":"a"}]}""", h.controller.currentSceneJson)
+        assertEquals(scene, h.controller.currentScene)
         assertTrue(h.modifiedEvents.isEmpty())
         assertEquals(null, h.scheduler.pending, "no write must be scheduled for the echo")
     }
 
     // -------------------------------------------------------------------------
-    // arm: seeds baseline + currentSceneJson immediately
+    // arm: seeds baseline + currentScene immediately
     // -------------------------------------------------------------------------
 
     @Test
-    fun `arm seeds currentSceneJson and baseline immediately`() {
+    fun `arm seeds currentScene and baseline immediately`() {
         val h = Harness()
+        val scene = sceneOf("a")
 
-        h.controller.arm("""{"elements":[{"id":"a"}]}""")
+        h.controller.arm(scene)
 
-        assertEquals("""{"elements":[{"id":"a"}]}""", h.controller.currentSceneJson)
+        assertEquals(scene, h.controller.currentScene)
         assertFalse(h.controller.isModified)
 
         // A subsequent onSceneChanged with the SAME element content is a no-op re-render.
-        h.controller.onSceneChanged("""{"elements":[{"id":"a"}]}""", elementsOf("a"))
+        h.controller.onSceneChanged(sceneOf("a"))
         assertFalse(h.controller.isModified, "matching the armed baseline must not count as an edit")
         assertTrue(h.modifiedEvents.isEmpty())
     }
@@ -98,9 +123,9 @@ class AutosaveControllerTest {
     @Test
     fun `a genuine content change marks modified, fires the event once, and schedules a write`() {
         val h = Harness()
-        h.controller.arm("""{"elements":[]}""")
+        h.controller.arm(sceneOf())
 
-        h.controller.onSceneChanged("""{"elements":[{"id":"a"}]}""", elementsOf("a"))
+        h.controller.onSceneChanged(sceneOf("a"))
 
         assertTrue(h.controller.isModified)
         assertEquals(listOf(true), h.modifiedEvents, "exactly one false->true transition event")
@@ -108,13 +133,14 @@ class AutosaveControllerTest {
 
         // A second distinct change before the flush must not fire another modified event
         // (already true) — debounce still consolidates to one scheduled write.
-        h.controller.onSceneChanged("""{"elements":[{"id":"a"},{"id":"b"}]}""", elementsOf("a", "b"))
+        val latest = sceneOf("a", "b")
+        h.controller.onSceneChanged(latest)
         assertEquals(listOf(true), h.modifiedEvents, "no duplicate event while already modified")
 
         h.scheduler.flush()
 
         assertEquals(1, h.writeCallCount, "debounce must consolidate rapid changes to one write")
-        assertEquals("""{"elements":[{"id":"a"},{"id":"b"}]}""", h.lastWrittenJson)
+        assertEquals(latest, h.lastWrittenScene)
     }
 
     // -------------------------------------------------------------------------
@@ -124,17 +150,9 @@ class AutosaveControllerTest {
     @Test
     fun `version, versionNonce and updated churn does not count as an edit`() {
         val h = Harness()
-        h.controller.arm("""{"elements":[{"id":"a"}]}""")
+        h.controller.arm(sceneOf("a"))
 
-        val churned = JsonArray().apply {
-            add(JsonObject().apply {
-                addProperty("id", "a")
-                addProperty("version", 7)
-                addProperty("versionNonce", 12345)
-                addProperty("updated", 999999L)
-            })
-        }
-        h.controller.onSceneChanged("""{"elements":[{"id":"a","version":7}]}""", churned)
+        h.controller.onSceneChanged(churnedSceneOf("a"))
 
         assertFalse(h.controller.isModified, "churn-only fields must not register as content changes")
         assertEquals(0, h.writeCallCount)
@@ -148,8 +166,8 @@ class AutosaveControllerTest {
     fun `Saved result clears modified and fires the false transition event`() {
         val h = Harness()
         h.nextWriteResult = SceneSaveResult.Saved
-        h.controller.arm("""{"elements":[]}""")
-        h.controller.onSceneChanged("""{"elements":[{"id":"a"}]}""", elementsOf("a"))
+        h.controller.arm(sceneOf())
+        h.controller.onSceneChanged(sceneOf("a"))
 
         h.scheduler.flush()
 
@@ -161,8 +179,8 @@ class AutosaveControllerTest {
     fun `Failed result leaves modified true and does not fire another event`() {
         val h = Harness()
         h.nextWriteResult = SceneSaveResult.Failed("disk full")
-        h.controller.arm("""{"elements":[]}""")
-        h.controller.onSceneChanged("""{"elements":[{"id":"a"}]}""", elementsOf("a"))
+        h.controller.arm(sceneOf())
+        h.controller.onSceneChanged(sceneOf("a"))
 
         h.scheduler.flush()
 
@@ -174,8 +192,8 @@ class AutosaveControllerTest {
     fun `Skipped result leaves modified true and does not fire another event`() {
         val h = Harness()
         h.nextWriteResult = SceneSaveResult.Skipped
-        h.controller.arm("""{"elements":[]}""")
-        h.controller.onSceneChanged("""{"elements":[{"id":"a"}]}""", elementsOf("a"))
+        h.controller.arm(sceneOf())
+        h.controller.onSceneChanged(sceneOf("a"))
 
         h.scheduler.flush()
 
@@ -190,8 +208,8 @@ class AutosaveControllerTest {
     @Test
     fun `dispose cancels the pending scheduled write`() {
         val h = Harness()
-        h.controller.arm("""{"elements":[]}""")
-        h.controller.onSceneChanged("""{"elements":[{"id":"a"}]}""", elementsOf("a"))
+        h.controller.arm(sceneOf())
+        h.controller.onSceneChanged(sceneOf("a"))
 
         h.controller.dispose()
         h.scheduler.flush()
@@ -202,7 +220,7 @@ class AutosaveControllerTest {
     @Test
     fun `no scene change ever results in no scheduled write`() {
         val h = Harness()
-        h.controller.arm("""{"elements":[]}""")
+        h.controller.arm(sceneOf())
 
         h.scheduler.flush()
 

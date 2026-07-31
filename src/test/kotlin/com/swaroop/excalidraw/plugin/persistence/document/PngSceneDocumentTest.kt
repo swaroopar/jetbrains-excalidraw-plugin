@@ -1,10 +1,13 @@
 package com.swaroop.excalidraw.plugin.persistence.document
 
 import com.google.gson.Gson
+import com.google.gson.JsonArray
+import com.google.gson.JsonObject
 import com.intellij.openapi.vfs.VirtualFile
 import com.swaroop.excalidraw.plugin.bridge.ExcalidrawJsBridge
 import com.swaroop.excalidraw.plugin.editor.StubVirtualFile
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawPersistenceService
+import com.swaroop.excalidraw.plugin.persistence.Scene
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -53,7 +56,8 @@ class PngSceneDocumentTest {
             """{"type":"pngExtracted","sceneJson":${Gson().toJson(extractedScene)}}"""
         )
 
-        assertEquals(SceneLoadResult.LoadedAndBaselined(extractedScene), result)
+        val expected = Scene("excalidraw", 2, null, JsonArray(), JsonObject(), null)
+        assertEquals(SceneLoadResult.LoadedAndBaselined(expected), result)
     }
 
     @Test
@@ -69,7 +73,7 @@ class PngSceneDocumentTest {
 
         assertTrue(result is SceneLoadResult.LoadedAndBaselined,
             "extraction failure must still open a blank, armed drawing, got: $result")
-        assertTrue((result as SceneLoadResult.LoadedAndBaselined).sceneJson.contains("\"elements\":[]"))
+        assertEquals(0, (result as SceneLoadResult.LoadedAndBaselined).scene.elements.size())
     }
 
     // -------------------------------------------------------------------------
@@ -84,7 +88,7 @@ class PngSceneDocumentTest {
         val document = PngSceneDocument(ExcalidrawPersistenceService())
 
         var result: SceneSaveResult? = null
-        document.save(file, """{"type":"excalidraw","elements":[],"appState":{}}""", bridge) { result = it }
+        document.save(file, Scene("excalidraw", 2, null, JsonArray(), JsonObject(), null), bridge) { result = it }
 
         assertEquals(SceneSaveResult.Skipped, result)
         assertTrue(capturedJs.none { it.contains("__excalidrawExportPng__") },
@@ -107,7 +111,7 @@ class PngSceneDocumentTest {
         )
 
         var result: SceneSaveResult? = null
-        document.save(file, """{"type":"excalidraw","elements":[],"appState":{}}""", bridge) { result = it }
+        document.save(file, Scene("excalidraw", 2, null, JsonArray(), JsonObject(), null), bridge) { result = it }
 
         assertTrue(capturedJs.any { it.contains("__excalidrawExportPng__") },
             "armed save must inject requestPngExport JS. Got: $capturedJs")
@@ -135,7 +139,7 @@ class PngSceneDocumentTest {
         )
 
         var result: SceneSaveResult? = null
-        document.save(file, """{"type":"excalidraw","elements":[],"appState":{}}""", bridge) { result = it }
+        document.save(file, Scene("excalidraw", 2, null, JsonArray(), JsonObject(), null), bridge) { result = it }
         bridge.simulatePngExported("""{"type":"pngExported","error":"Export failed"}""")
 
         assertEquals(0, fakePersistence.writePngSceneCallCount)

@@ -1,10 +1,10 @@
 package com.swaroop.excalidraw.plugin.editor
 
 import com.swaroop.excalidraw.plugin.bridge.ExcalidrawJsBridge
-import com.swaroop.excalidraw.plugin.bridge.SceneChangeMessage
 import com.swaroop.excalidraw.plugin.editor.autosave.ManualScheduler
 import com.swaroop.excalidraw.plugin.jcef.ExcalidrawJcefHost
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawPersistenceService
+import com.swaroop.excalidraw.plugin.persistence.Scene
 import com.intellij.openapi.vfs.VirtualFile
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -48,11 +48,11 @@ class AutosaveDebounceTest {
      */
     private class FakePersistenceService : ExcalidrawPersistenceService() {
         var writeSceneCallCount: Int = 0
-        var lastWrittenJson: String? = null
+        var lastWrittenScene: Scene? = null
 
-        override fun writeScene(file: VirtualFile, json: String) {
+        override fun writeScene(file: VirtualFile, scene: Scene) {
             writeSceneCallCount++
-            lastWrittenJson = json
+            lastWrittenScene = scene
         }
     }
 
@@ -75,12 +75,12 @@ class AutosaveDebounceTest {
 
         val bridge = ExcalidrawJsBridge.createForTest(
             injector = { _ -> },
-            sceneChangeHandler = { scene: SceneChangeMessage ->
+            sceneChangeHandler = { scene: Scene ->
                 editorHolder?.onSceneChanged(scene)
             }
         )
 
-        // Blank content: readSceneOrNew opens it as a fresh blank canvas (ExcalidrawScene.newEmpty()),
+        // Blank content: readSceneOrNew opens it as a fresh blank canvas (Scene.empty()),
         // so fireLoadEnd() below succeeds and arms the autosave controller (see AC-E4-01/AD-04).
         val file = StubVirtualFile("test.excalidraw", "".toByteArray(Charsets.UTF_8))
         val host = ExcalidrawJcefHost.createForTest()
