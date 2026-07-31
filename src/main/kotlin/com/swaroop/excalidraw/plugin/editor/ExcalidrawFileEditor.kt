@@ -212,8 +212,78 @@ class ExcalidrawFileEditor private constructor(
         }
 
         /**
+         * The single assembly point for [ExcalidrawFileEditor]'s object graph — shared by
+         * [invoke] (production) and [createForTest] (unit tests) so the two never drift.
+         *
+         * Both callers already have a fully-built [bridge] and [jcefHost] in hand; what's
+         * left to wire is always the same regardless of which adapters (real JCEF vs stubs)
+         * back them:
+         *  - construct the editor,
+         *  - route [bridge]'s scene-change events to [ExcalidrawFileEditor.onSceneChanged]
+         *    via [ExcalidrawJsBridge.registerSceneChangeHandler] — done *after* the editor
+         *    exists, which sidesteps the bridge-needs-handler/handler-needs-editor
+         *    construction-order cycle without a forward-reference holder,
+         *  - register [jcefHost]/[bridge]/[themeController] as child-Disposables,
+         *  - wire the loadEnd callback,
+         *  - and, in production only ([wireLibraryBrowsing] = true), wire the library
+         *    round-trip ([openLibraryBrowser] itself no-ops without a [project]).
+         */
+        private fun assemble(
+            project: Project?,
+            file: VirtualFile,
+            jcefHost: ExcalidrawJcefHost,
+            bridge: ExcalidrawJsBridge,
+            persistenceService: ExcalidrawPersistenceService,
+            notifier: (String) -> Unit,
+            scheduler: Scheduler?,
+            themeController: ExcalidrawThemeController?,
+            wireLibraryBrowsing: Boolean
+        ): ExcalidrawFileEditor {
+            val document: SceneDocument = if (isExcalidrawPng(file.name)) {
+                PngSceneDocument(persistenceService)
+            } else {
+                JsonSceneDocument(persistenceService)
+            }
+
+            val editor = ExcalidrawFileEditor(
+                project = project,
+                file = file,
+                jcefHost = jcefHost,
+                bridge = bridge,
+                persistenceService = persistenceService,
+                document = document,
+                notifier = notifier,
+                scheduler = scheduler,
+                themeController = themeController
+            )
+
+            bridge.registerSceneChangeHandler(editor::onSceneChanged)
+            Disposer.register(editor, jcefHost)
+            Disposer.register(editor, bridge)
+            // Register the ThemeController as a child-Disposable of this editor so the
+            // IDE's Disposer chain calls dispose() when the editor closes (listener-leak-free,
+            // AC-E4-02, task-05-007).
+            themeController?.let { Disposer.register(editor, it) }
+            editor.wireLoadEndCallback()
+
+            if (wireLibraryBrowsing) {
+                // "Browse libraries" → open the in-IDE library browser and round-trip the
+                // chosen library back into this editor.
+                jcefHost.onBrowseLibraries = { url -> editor.openLibraryBrowser(url) }
+                // Persist the library on every change (IndexedDB is unavailable on the
+                // opaque origin), so added libraries survive IDE restarts.
+                bridge.registerLibraryChangeCallback { itemsJson ->
+                    ExcalidrawLibraryService.getInstance().libraryItemsJson = itemsJson
+                }
+            }
+
+            return editor
+        }
+
+        /**
          * Production constructor — creates real [ExcalidrawJcefHost] and
-         * [ExcalidrawJsBridge] instances backed by the live JCEF runtime.
+         * [ExcalidrawJsBridge] instances backed by the live JCEF runtime, then wires them
+         * via the shared [assemble] seam.
          *
          * [ExcalidrawJcefHost.browserForBridge] provides the [JBCefBrowser] needed to
          * create the bridge without reflection (scope-extension: ExcalidrawJcefHost.kt
@@ -231,17 +301,7 @@ class ExcalidrawFileEditor private constructor(
                     "check JCEF availability (JBCefApp.isSupported) before opening the editor"
             }
 
-            // Use a mutable holder so the sceneChangeHandler lambda can reference
-            // the editor before the editor instance exists (AD-05: forward reference).
-            var editorHolder: ExcalidrawFileEditor? = null
-            val bridge = ExcalidrawJsBridge.create(
-                browser = browser,
-                sceneChangeHandler = { scene ->
-                    // editor is set immediately after construction in the .also block.
-                    editorHolder?.onSceneChanged(scene)
-                        ?: LOG.warn("ExcalidrawFileEditor: sceneChangeHandler fired before editor was initialised")
-                }
-            )
+            val bridge = ExcalidrawJsBridge.create(browser = browser)
 
             val notifier: (String) -> Unit = { message ->
                 val notification = Notification(
@@ -253,51 +313,36 @@ class ExcalidrawFileEditor private constructor(
                 Notifications.Bus.notify(notification, project)
             }
 
-            // Create the ThemeController before the editor so it can be passed
+            // Create the ThemeController before assembling the editor so it can be passed
             // as a constructor field (needed by wireLoadEndCallback for the
             // loadEnd-timed pushCurrentTheme call — task-05-007 timing contract).
             val themeController = ExcalidrawThemeController(bridge)
 
-            val persistenceService = ExcalidrawPersistenceService()
-            val document: SceneDocument = if (isExcalidrawPng(file.name)) {
-                PngSceneDocument(persistenceService)
-            } else {
-                JsonSceneDocument(persistenceService)
-            }
-
-            return ExcalidrawFileEditor(
+            return assemble(
                 project = project,
                 file = file,
                 jcefHost = host,
                 bridge = bridge,
-                persistenceService = persistenceService,
-                document = document,
+                persistenceService = ExcalidrawPersistenceService(),
                 notifier = notifier,
                 scheduler = null,
-                themeController = themeController
-            ).also { editor ->
-                editorHolder = editor
-                Disposer.register(editor, host)
-                Disposer.register(editor, bridge)
-                // Register the ThemeController as a child-Disposable of this editor
-                // so the IDE's Disposer chain calls dispose() when the editor closes
-                // (listener-leak-free, AC-E4-02, task-05-007).
-                Disposer.register(editor, themeController)
-                editor.wireLoadEndCallback()
-                // "Browse libraries" → open the in-IDE library browser and round-trip the
-                // chosen library back into this editor.
-                host.onBrowseLibraries = { url -> editor.openLibraryBrowser(url) }
-                // Persist the library on every change (IndexedDB is unavailable on the
-                // opaque origin), so added libraries survive IDE restarts.
-                bridge.registerLibraryChangeCallback { itemsJson ->
-                    ExcalidrawLibraryService.getInstance().libraryItemsJson = itemsJson
-                }
-            }
+                themeController = themeController,
+                wireLibraryBrowsing = true
+            )
         }
 
         /**
          * Test factory — creates an editor with pre-built [jcefHost] and [bridge] stubs
-         * so that unit tests can run without a live JCEF runtime.
+         * so that unit tests can run without a live JCEF runtime, wired via the same
+         * [assemble] seam [invoke] uses (library browsing excluded — [project] is null in
+         * test mode).
+         *
+         * Callers no longer need to hand-wire [bridge]'s scene-change handler to the
+         * editor's [onSceneChanged] themselves (the historical "editorHolder" forward-
+         * reference dance): [assemble] does it via
+         * [ExcalidrawJsBridge.registerSceneChangeHandler] once the editor exists. Just
+         * build [bridge] with whatever `injector`/`readyHandler` a test needs and pass it
+         * straight through.
          *
          * The [notifier] parameter lets tests assert that an error notification was
          * triggered (AC-E1-02) without requiring a live IDE notification subsystem.
@@ -330,33 +375,17 @@ class ExcalidrawFileEditor private constructor(
             },
             scheduler: Scheduler? = null,
             themeController: ExcalidrawThemeController? = null
-        ): ExcalidrawFileEditor {
-            val document: SceneDocument = if (isExcalidrawPng(file.name)) {
-                PngSceneDocument(persistenceService)
-            } else {
-                JsonSceneDocument(persistenceService)
-            }
-            return ExcalidrawFileEditor(
-                project = null,
-                file = file,
-                jcefHost = jcefHost,
-                bridge = bridge,
-                persistenceService = persistenceService,
-                document = document,
-                notifier = notifier,
-                scheduler = scheduler,
-                themeController = themeController
-            ).also { editor ->
-                Disposer.register(editor, jcefHost)
-                Disposer.register(editor, bridge)
-                // Register the ThemeController if injected, so the Disposer chain
-                // disposes it when the editor closes (lifecycle binding, task-05-007).
-                if (themeController != null) {
-                    Disposer.register(editor, themeController)
-                }
-                editor.wireLoadEndCallback()
-            }
-        }
+        ): ExcalidrawFileEditor = assemble(
+            project = null,
+            file = file,
+            jcefHost = jcefHost,
+            bridge = bridge,
+            persistenceService = persistenceService,
+            notifier = notifier,
+            scheduler = scheduler,
+            themeController = themeController,
+            wireLibraryBrowsing = false
+        )
     }
 
     // -------------------------------------------------------------------------

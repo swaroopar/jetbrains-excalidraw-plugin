@@ -1,7 +1,6 @@
 package com.swaroop.excalidraw.plugin.editor
 
 import com.swaroop.excalidraw.plugin.bridge.ExcalidrawJsBridge
-import com.swaroop.excalidraw.plugin.persistence.Scene
 import com.swaroop.excalidraw.plugin.jcef.ExcalidrawJcefHost
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawPersistenceService
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -50,19 +49,12 @@ class ExcalidrawFileEditorEditTest {
      * Builds a [Pair] of ([ExcalidrawFileEditor], [ExcalidrawJsBridge]) wired so that
      * [ExcalidrawJsBridge.simulateSceneChange] drives [ExcalidrawFileEditor.onSceneChanged].
      *
-     * Strategy: the bridge's [sceneChangeHandler] is a forwarding lambda that captures
-     * the editor reference in a holder. The editor is set into the holder immediately
-     * after construction, before any scene-change event can arrive.
+     * [ExcalidrawFileEditor.createForTest] wires that routing itself (via
+     * [ExcalidrawJsBridge.registerSceneChangeHandler]) — no forward-reference dance needed
+     * here.
      */
     private fun buildEditorWithBridge(): Pair<ExcalidrawFileEditor, ExcalidrawJsBridge> {
-        var editorHolder: ExcalidrawFileEditor? = null
-
-        val bridge = ExcalidrawJsBridge.createForTest(
-            injector = { _ -> },
-            sceneChangeHandler = { scene: Scene ->
-                editorHolder?.onSceneChanged(scene)
-            }
-        )
+        val bridge = ExcalidrawJsBridge.createForTest(injector = { _ -> })
 
         // Blank content: readSceneOrNew opens it as a fresh blank canvas, so fireLoadEnd()
         // below succeeds and arms the autosave controller (AC-E4-01/AD-04).
@@ -77,7 +69,6 @@ class ExcalidrawFileEditorEditTest {
             notifier = { _ -> }
         )
 
-        editorHolder = editor
         // Real open path: arms the autosave controller before any scene-change event
         // can arrive (plain JSON has no separate round-trip, so this always settles
         // synchronously before onSceneChanged could possibly be called).

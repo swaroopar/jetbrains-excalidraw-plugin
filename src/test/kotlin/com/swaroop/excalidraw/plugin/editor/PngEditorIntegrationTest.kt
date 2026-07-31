@@ -152,14 +152,8 @@ class PngEditorIntegrationTest {
         val capturedJs = mutableListOf<String>()
         val fakePersistence = FakePersistenceService()
         val scheduler = com.swaroop.excalidraw.plugin.editor.autosave.ManualScheduler()
-        var editorHolder: ExcalidrawFileEditor? = null
 
-        val bridge = ExcalidrawJsBridge.createForTest(
-            injector = { js -> capturedJs.add(js) },
-            sceneChangeHandler = { scene: Scene ->
-                editorHolder?.onSceneChanged(scene)
-            }
-        )
+        val bridge = ExcalidrawJsBridge.createForTest(injector = { js -> capturedJs.add(js) })
         val file = StubVirtualFile("save.excalidraw.png", stubPngBytes)
         val stubHost = ExcalidrawJcefHost.createForTest()
 
@@ -171,7 +165,6 @@ class PngEditorIntegrationTest {
             notifier = { _ -> },
             scheduler = scheduler
         )
-        editorHolder = editor
         // Arm the PNG editor through the realistic open path: loadEnd, then a successful
         // extraction whose scene has one __baseline__ element. This arms the autosave
         // controller and seeds the baseline, so the empty-elements edit below counts as
@@ -238,14 +231,8 @@ class PngEditorIntegrationTest {
         val capturedNotifications = mutableListOf<String>()
         val fakePersistence = FakePersistenceService()
         val scheduler = com.swaroop.excalidraw.plugin.editor.autosave.ManualScheduler()
-        var editorHolder: ExcalidrawFileEditor? = null
 
-        val bridge = ExcalidrawJsBridge.createForTest(
-            injector = { js -> capturedJs.add(js) },
-            sceneChangeHandler = { scene: Scene ->
-                editorHolder?.onSceneChanged(scene)
-            }
-        )
+        val bridge = ExcalidrawJsBridge.createForTest(injector = { js -> capturedJs.add(js) })
         val file = StubVirtualFile("valid.excalidraw.png", stubPngBytes)
         val stubHost = ExcalidrawJcefHost.createForTest()
 
@@ -257,7 +244,6 @@ class PngEditorIntegrationTest {
             notifier = { msg -> capturedNotifications.add(msg) },
             scheduler = scheduler
         )
-        editorHolder = editor
 
         // Simulate the JCEF loadEnd event
         stubHost.fireLoadEnd()
