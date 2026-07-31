@@ -2,6 +2,7 @@ package com.swaroop.excalidraw.plugin.editor
 
 import com.swaroop.excalidraw.plugin.bridge.ExcalidrawJsBridge
 import com.swaroop.excalidraw.plugin.bridge.SceneChangeMessage
+import com.swaroop.excalidraw.plugin.editor.autosave.ManualScheduler
 import com.swaroop.excalidraw.plugin.jcef.ExcalidrawJcefHost
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawPersistenceService
 import com.intellij.openapi.vfs.VirtualFile
@@ -27,9 +28,9 @@ import org.junit.jupiter.api.Test
  *   Dispose safety: dispose() while a pending debounce alarm cancels the alarm;
  *     no writeScene() is called after dispose().
  *
- * No real Alarm timing or Thread.sleep is used.  The [debounceExecutor] parameter
- * injected into [ExcalidrawFileEditor.createForTest] is a Runnable collector that
- * tests invoke manually to trigger the debounce callback synchronously.
+ * No real Alarm timing or Thread.sleep is used. A [ManualScheduler] is injected via
+ * [ExcalidrawFileEditor.createForTest]'s `scheduler` parameter; tests call
+ * [ManualScheduler.flush] to trigger the debounced write synchronously.
  *
  * No kotlinx-coroutines-test or new Gradle dependency is introduced.
  */
@@ -60,17 +61,15 @@ class AutosaveDebounceTest {
     // -------------------------------------------------------------------------
 
     /**
-     * Builds an [ExcalidrawFileEditor] wired for debounce testing.
+     * Builds an [ExcalidrawFileEditor] wired for debounce testing, using a
+     * [ManualScheduler] in place of the real [com.intellij.util.Alarm] — tests call
+     * [ManualScheduler.flush] to fire the pending debounced write synchronously.
      *
-     * [pendingExecutors] is populated with the Runnable that the debounce alarm
-     * would schedule.  Tests call [pendingExecutors].last().run() to simulate
-     * the alarm firing.  Rapid calls replace the pending Runnable (last-write-wins
-     * debounce behaviour).
-     *
-     * @return Triple of (editor, bridge, fakePersistenceService)
+     * @return Quadruple of (editor, bridge, fakePersistenceService, scheduler)
      */
-    private fun buildTestEditor(): Triple<ExcalidrawFileEditor, ExcalidrawJsBridge, FakePersistenceService> {
+    private fun buildTestEditor(): TestEditor {
         val fakePersistence = FakePersistenceService()
+        val scheduler = ManualScheduler()
 
         var editorHolder: ExcalidrawFileEditor? = null
 
@@ -81,7 +80,9 @@ class AutosaveDebounceTest {
             }
         )
 
-        val file = StubVirtualFile("test.excalidraw", "{}".toByteArray(Charsets.UTF_8))
+        // Blank content: readSceneOrNew opens it as a fresh blank canvas (ExcalidrawScene.newEmpty()),
+        // so fireLoadEnd() below succeeds and arms the autosave controller (see AC-E4-01/AD-04).
+        val file = StubVirtualFile("test.excalidraw", "".toByteArray(Charsets.UTF_8))
         val host = ExcalidrawJcefHost.createForTest()
 
         val editor = ExcalidrawFileEditor.createForTest(
@@ -90,20 +91,27 @@ class AutosaveDebounceTest {
             bridge = bridge,
             persistenceService = fakePersistence,
             notifier = { _ -> },
-            // Pass a no-op debounceExecutor to activate test-mode debounce path.
-            // The editor stores the pending runnable internally; tests call
-            // editor.flushDebounce() to fire it synchronously.
-            debounceExecutor = {}
+            scheduler = scheduler
         )
 
         editorHolder = editor
+        // Real open path: arms the autosave controller (awaitEcho — plain JSON has no
+        // separate load round-trip to consult) before any scene-change event can arrive.
+        host.fireLoadEnd()
         // Establish the unedited baseline (mirrors the initial onChange Excalidraw
         // fires when a scene loads). Subsequent distinct scene changes are then
         // treated as real edits. Uses an element type none of the tests use so it
         // differs from every test payload.
         bridge.simulateSceneChange(BASELINE_PAYLOAD)
-        return Triple(editor, bridge, fakePersistence)
+        return TestEditor(editor, bridge, fakePersistence, scheduler)
     }
+
+    private data class TestEditor(
+        val editor: ExcalidrawFileEditor,
+        val bridge: ExcalidrawJsBridge,
+        val fakePersistence: FakePersistenceService,
+        val scheduler: ManualScheduler
+    )
 
     private companion object {
         const val BASELINE_PAYLOAD =
@@ -120,7 +128,7 @@ class AutosaveDebounceTest {
      */
     @Test
     fun `single onSceneChanged triggers exactly one writeScene after debounce fires`() {
-        val (editor, bridge, fakePersistence) = buildTestEditor()
+        val (editor, bridge, fakePersistence, scheduler) = buildTestEditor()
 
         val scenePayload =
             """{"type":"sceneChange","elements":[{"type":"rectangle"}],"appState":{"viewBackgroundColor":"#ffffff"}}"""
@@ -131,7 +139,7 @@ class AutosaveDebounceTest {
         assertEquals(0, fakePersistence.writeSceneCallCount, "writeScene must not be called before debounce fires")
 
         // Fire the pending debounce executor.
-        editor.flushDebounce()
+        scheduler.flush()
 
         assertEquals(1, fakePersistence.writeSceneCallCount, "Exactly one writeScene must be called after debounce fires (AC-E3-01)")
 
@@ -149,7 +157,7 @@ class AutosaveDebounceTest {
      */
     @Test
     fun `multiple rapid onSceneChanged calls debounce to exactly one writeScene`() {
-        val (editor, bridge, fakePersistence) = buildTestEditor()
+        val (editor, bridge, fakePersistence, scheduler) = buildTestEditor()
 
         val payload1 =
             """{"type":"sceneChange","elements":[{"type":"rectangle"}],"appState":{"viewBackgroundColor":"#ffffff"}}"""
@@ -166,7 +174,7 @@ class AutosaveDebounceTest {
         assertEquals(0, fakePersistence.writeSceneCallCount, "writeScene must not be called before debounce fires")
 
         // Fire once — only the last pending executor runs.
-        editor.flushDebounce()
+        scheduler.flush()
 
         assertEquals(
             1,
@@ -187,7 +195,7 @@ class AutosaveDebounceTest {
      */
     @Test
     fun `isModified is true after onSceneChanged and false after debounce fires`() {
-        val (editor, bridge, _) = buildTestEditor()
+        val (editor, bridge, _, scheduler) = buildTestEditor()
 
         val scenePayload =
             """{"type":"sceneChange","elements":[],"appState":{"viewBackgroundColor":"#ffffff"}}"""
@@ -198,7 +206,7 @@ class AutosaveDebounceTest {
 
         assertTrue(editor.isModified(), "isModified must be true after onSceneChanged (before debounce fires) (AC-E3-03)")
 
-        editor.flushDebounce()
+        scheduler.flush()
 
         assertFalse(editor.isModified(), "isModified must be false after debounce fires and write completes (AC-E3-03)")
 
@@ -215,7 +223,7 @@ class AutosaveDebounceTest {
      */
     @Test
     fun `dispose during pending alarm prevents writeScene after dispose`() {
-        val (editor, bridge, fakePersistence) = buildTestEditor()
+        val (editor, bridge, fakePersistence, scheduler) = buildTestEditor()
 
         val scenePayload =
             """{"type":"sceneChange","elements":[{"type":"rectangle"}],"appState":{"viewBackgroundColor":"#ffffff"}}"""
@@ -226,7 +234,7 @@ class AutosaveDebounceTest {
         editor.dispose()
 
         // Attempt to fire the debounce after dispose — must be a no-op.
-        editor.flushDebounce()
+        scheduler.flush()
 
         assertEquals(
             0,
@@ -241,20 +249,20 @@ class AutosaveDebounceTest {
 
     /**
      * AC-E3-01 — kein Event → kein Write:
-     * When no [onSceneChanged] event is ever fired, [flushDebounce] must be a no-op
-     * and [writeScene] must never be called.
+     * When no [onSceneChanged] event is ever fired, [ManualScheduler.flush] must be a
+     * no-op and [writeScene] must never be called.
      *
      * This covers the "no event → no write" branch of the debounce state machine:
-     * [pendingDebounce] stays null, so [flushDebounce] has nothing to execute.
+     * [ManualScheduler.pending] stays null, so [ManualScheduler.flush] has nothing to execute.
      */
     @Test
     fun `no scene change event results in no writeScene call`() {
-        val (editor, _, fakePersistence) = buildTestEditor()
+        val (editor, _, fakePersistence, scheduler) = buildTestEditor()
 
         // No bridge.simulateSceneChange() called — editor receives no events.
 
         // Flushing the debounce without a pending runnable must be a no-op.
-        editor.flushDebounce()
+        scheduler.flush()
 
         assertEquals(
             0,
@@ -279,7 +287,7 @@ class AutosaveDebounceTest {
      */
     @Test
     fun `five rapid onSceneChanged calls debounce to exactly one writeScene`() {
-        val (editor, bridge, fakePersistence) = buildTestEditor()
+        val (editor, bridge, fakePersistence, scheduler) = buildTestEditor()
 
         val payloadTemplate =
             """{"type":"sceneChange","elements":[{"type":"rectangle","id":"%d"}],"appState":{"viewBackgroundColor":"#ffffff"}}"""
@@ -296,7 +304,7 @@ class AutosaveDebounceTest {
         )
 
         // Single flush — only the last pending runnable executes.
-        editor.flushDebounce()
+        scheduler.flush()
 
         assertEquals(
             1,

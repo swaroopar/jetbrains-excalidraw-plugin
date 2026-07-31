@@ -2,6 +2,7 @@ package com.swaroop.excalidraw.plugin.editor
 
 import com.swaroop.excalidraw.plugin.bridge.ExcalidrawJsBridge
 import com.swaroop.excalidraw.plugin.bridge.SceneChangeMessage
+import com.swaroop.excalidraw.plugin.editor.autosave.ManualScheduler
 import com.swaroop.excalidraw.plugin.jcef.ExcalidrawJcefHost
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawPersistenceService
 import com.intellij.openapi.vfs.VirtualFile
@@ -15,7 +16,7 @@ import org.junit.jupiter.api.Test
  * Unit tests for [ExcalidrawFileEditor] async PNG-save path (task-07-008).
  *
  * Acceptance criteria (AC-E6-02):
- *   - onSceneChanged + flushDebounce on a .excalidraw.png file injects
+ *   - onSceneChanged + a flushed [ManualScheduler] on a .excalidraw.png file injects
  *     __excalidrawExportPng__ into the JS bridge (not __excalidrawLoadScene__).
  *   - After simulatePngExported with a valid base64Png payload, writePngScene
  *     is invoked; the decoded bytes begin with PNG magic byte 0x89.
@@ -70,20 +71,26 @@ class PngEditorSaveTest {
         "AABjE+ibYAAAAASUVORK5CYII="
 
     // -------------------------------------------------------------------------
-    // Helper: build a PNG editor with fake persistence and debounce executor
+    // Helper: build a PNG editor with fake persistence and a manual scheduler
     // -------------------------------------------------------------------------
+
+    private data class TestEditor(
+        val editor: ExcalidrawFileEditor,
+        val bridge: ExcalidrawJsBridge,
+        val fakePersistence: FakePersistenceService,
+        val scheduler: ManualScheduler
+    )
 
     /**
      * Builds a [ExcalidrawFileEditor] for a .excalidraw.png file, wired for
-     * debounce testing with a [FakePersistenceService].
-     *
-     * @return Triple of (editor, bridge, fakePersistenceService)
+     * debounce testing with a [FakePersistenceService] and a [ManualScheduler].
      */
     private fun buildPngEditor(
         fileName: String = "save.excalidraw.png",
         pngBytes: ByteArray = ByteArray(8) { i -> if (i == 0) 0x89.toByte() else 0 }
-    ): Triple<ExcalidrawFileEditor, ExcalidrawJsBridge, FakePersistenceService> {
+    ): TestEditor {
         val fakePersistence = FakePersistenceService()
+        val scheduler = ManualScheduler()
 
         var editorHolder: ExcalidrawFileEditor? = null
 
@@ -104,18 +111,19 @@ class PngEditorSaveTest {
             bridge = bridge,
             persistenceService = fakePersistence,
             notifier = { _ -> },
-            debounceExecutor = {}
+            scheduler = scheduler
         )
 
         editorHolder = editor
         // Arm the PNG editor through the realistic open path: fire loadEnd, then deliver a
-        // successful extraction. This sets pngSceneExtracted=true and seeds the baseline from
-        // the extracted scene (one __baseline__ element), so the empty-elements edit the tests
-        // fire afterwards counts as a genuine change. Without this, autosave stays disabled —
-        // a .excalidraw.png whose scene was never extracted must never be overwritten.
+        // successful extraction. This arms the autosave controller and seeds the baseline
+        // from the extracted scene (one __baseline__ element), so the empty-elements edit the
+        // tests fire afterwards counts as a genuine change. Without this, autosave stays
+        // disabled — a .excalidraw.png whose scene was never extracted must never be
+        // overwritten.
         stubHost.fireLoadEnd()
         bridge.simulatePngExtracted(EXTRACTED_BASELINE_PAYLOAD)
-        return Triple(editor, bridge, fakePersistence)
+        return TestEditor(editor, bridge, fakePersistence, scheduler)
     }
 
     private companion object {
@@ -138,8 +146,9 @@ class PngEditorSaveTest {
     // -------------------------------------------------------------------------
 
     /**
-     * AC-E6-02 (part A): After onSceneChanged + flushDebounce on a .excalidraw.png
-     * file, at least one injected JS string must contain "__excalidrawExportPng__".
+     * AC-E6-02 (part A): After onSceneChanged + flushing the scheduler on a
+     * .excalidraw.png file, at least one injected JS string must contain
+     * "__excalidrawExportPng__".
      *
      * The .excalidraw path must NOT be taken — __excalidrawLoadScene__ must not
      * appear in the autosave JS calls.
@@ -147,12 +156,12 @@ class PngEditorSaveTest {
     @Test
     fun `autosave on png file injects requestPngExport JS with EXPORT_PNG_FN`() {
         val capturedJs = mutableListOf<String>()
-        val bridge = ExcalidrawJsBridge.createForTest(injector = { js -> capturedJs.add(js) })
+        val scheduler = ManualScheduler()
+        val fakePersistence = FakePersistenceService()
 
         val file = StubVirtualFile("save.excalidraw.png",
             ByteArray(8) { i -> if (i == 0) 0x89.toByte() else 0 })
         val stubHost = ExcalidrawJcefHost.createForTest()
-        val fakePersistence = FakePersistenceService()
 
         var editorHolder: ExcalidrawFileEditor? = null
         val bridgeForScene = ExcalidrawJsBridge.createForTest(
@@ -168,7 +177,7 @@ class PngEditorSaveTest {
             bridge = bridgeForScene,
             persistenceService = fakePersistence,
             notifier = { _ -> },
-            debounceExecutor = {}
+            scheduler = scheduler
         )
         editorHolder = editor
         // Arm via the realistic open path before exercising autosave.
@@ -180,8 +189,8 @@ class PngEditorSaveTest {
             """{"type":"sceneChange","elements":[],"appState":{"viewBackgroundColor":"#ffffff"}}"""
         bridgeForScene.simulateSceneChange(scenePayload)
 
-        // Flush the debounce — this should inject __excalidrawExportPng__
-        editor.flushDebounce()
+        // Flush the scheduler — this should inject __excalidrawExportPng__
+        scheduler.flush()
 
         assertTrue(
             capturedJs.any { it.contains("__excalidrawExportPng__") },
@@ -208,15 +217,15 @@ class PngEditorSaveTest {
      */
     @Test
     fun `simulatePngExported success calls writePngScene and bytes start with PNG magic`() {
-        val (editor, bridge, fakePersistence) = buildPngEditor()
+        val (editor, bridge, fakePersistence, scheduler) = buildPngEditor()
 
         // Set currentSceneJson via a scene change event
         val scenePayload =
             """{"type":"sceneChange","elements":[],"appState":{"viewBackgroundColor":"#ffffff"}}"""
         bridge.simulateSceneChange(scenePayload)
 
-        // Flush the debounce to trigger the PNG export request
-        editor.flushDebounce()
+        // Flush the scheduler to trigger the PNG export request
+        scheduler.flush()
 
         // Simulate the JS side returning the PNG export result
         bridge.simulatePngExported(
@@ -250,7 +259,7 @@ class PngEditorSaveTest {
      */
     @Test
     fun `isModified is false after successful PNG export and write`() {
-        val (editor, bridge, _) = buildPngEditor()
+        val (editor, bridge, _, scheduler) = buildPngEditor()
 
         val scenePayload =
             """{"type":"sceneChange","elements":[],"appState":{"viewBackgroundColor":"#ffffff"}}"""
@@ -258,7 +267,7 @@ class PngEditorSaveTest {
 
         assertTrue(editor.isModified(), "isModified must be true after scene change (pre-save)")
 
-        editor.flushDebounce()
+        scheduler.flush()
 
         // Simulate success
         bridge.simulatePngExported(
@@ -286,6 +295,7 @@ class PngEditorSaveTest {
     fun `simulatePngExported error does not call writePngScene and modified stays true`() {
         val notifierCalls = mutableListOf<String>()
         val fakePersistence = FakePersistenceService()
+        val scheduler = ManualScheduler()
         var editorHolder: ExcalidrawFileEditor? = null
 
         val bridge = ExcalidrawJsBridge.createForTest(
@@ -305,7 +315,7 @@ class PngEditorSaveTest {
             bridge = bridge,
             persistenceService = fakePersistence,
             notifier = { msg -> notifierCalls.add(msg) },
-            debounceExecutor = {}
+            scheduler = scheduler
         )
         editorHolder = editor
         // Arm via the realistic open path before exercising autosave.
@@ -317,7 +327,7 @@ class PngEditorSaveTest {
             """{"type":"sceneChange","elements":[],"appState":{"viewBackgroundColor":"#ffffff"}}"""
         bridge.simulateSceneChange(scenePayload)
 
-        editor.flushDebounce()
+        scheduler.flush()
 
         // Simulate export error
         bridge.simulatePngExported(
@@ -349,6 +359,7 @@ class PngEditorSaveTest {
     @Test
     fun `autosave on excalidraw file uses writeScene not writePngScene`() {
         val fakePersistence = FakePersistenceService()
+        val scheduler = ManualScheduler()
         var editorHolder: ExcalidrawFileEditor? = null
 
         val bridge = ExcalidrawJsBridge.createForTest(
@@ -358,7 +369,9 @@ class PngEditorSaveTest {
             }
         )
 
-        val file = StubVirtualFile("diagram.excalidraw", "{}".toByteArray(Charsets.UTF_8))
+        // Blank content: readSceneOrNew opens it as a fresh blank canvas, so fireLoadEnd()
+        // below succeeds and arms the autosave controller.
+        val file = StubVirtualFile("diagram.excalidraw", "".toByteArray(Charsets.UTF_8))
         val stubHost = ExcalidrawJcefHost.createForTest()
 
         val editor = ExcalidrawFileEditor.createForTest(
@@ -367,15 +380,16 @@ class PngEditorSaveTest {
             bridge = bridge,
             persistenceService = fakePersistence,
             notifier = { _ -> },
-            debounceExecutor = {}
+            scheduler = scheduler
         )
         editorHolder = editor
+        stubHost.fireLoadEnd()
         bridge.simulateSceneChange(BASELINE_PAYLOAD)
 
         val scenePayload =
             """{"type":"sceneChange","elements":[],"appState":{"viewBackgroundColor":"#ffffff"}}"""
         bridge.simulateSceneChange(scenePayload)
-        editor.flushDebounce()
+        scheduler.flush()
 
         assertEquals(
             1,
@@ -411,6 +425,7 @@ class PngEditorSaveTest {
     @Test
     fun `opening a scene-less png does not write the file`() {
         val fakePersistence = FakePersistenceService()
+        val scheduler = ManualScheduler()
         var editorHolder: ExcalidrawFileEditor? = null
 
         val bridge = ExcalidrawJsBridge.createForTest(
@@ -432,7 +447,7 @@ class PngEditorSaveTest {
             bridge = bridge,
             persistenceService = fakePersistence,
             notifier = { _ -> },
-            debounceExecutor = {}
+            scheduler = scheduler
         )
         editorHolder = editor
 
@@ -447,7 +462,7 @@ class PngEditorSaveTest {
             """{"type":"sceneChange","elements":[],"appState":{}}"""
         )
 
-        editor.flushDebounce()
+        scheduler.flush()
 
         assertEquals(
             0,

@@ -139,7 +139,7 @@ class PngEditorIntegrationTest {
     /**
      * AC-E6-02: Auto-saving a `.excalidraw.png` file re-embeds the scene.
      *
-     * After a scene-change event and [ExcalidrawFileEditor.flushDebounce]:
+     * After a scene-change event and flushing the injected [com.swaroop.excalidraw.plugin.editor.autosave.ManualScheduler]:
      *  - At least one captured JS string contains "__excalidrawExportPng__".
      *
      * After [ExcalidrawJsBridge.simulatePngExported] with a valid base64 payload:
@@ -151,6 +151,7 @@ class PngEditorIntegrationTest {
     fun `AC-E6-02 PNG save injects EXPORT_PNG_FN and writes bytes with PNG magic`() {
         val capturedJs = mutableListOf<String>()
         val fakePersistence = FakePersistenceService()
+        val scheduler = com.swaroop.excalidraw.plugin.editor.autosave.ManualScheduler()
         var editorHolder: ExcalidrawFileEditor? = null
 
         val bridge = ExcalidrawJsBridge.createForTest(
@@ -168,12 +169,13 @@ class PngEditorIntegrationTest {
             bridge = bridge,
             persistenceService = fakePersistence,
             notifier = { _ -> },
-            debounceExecutor = {}
+            scheduler = scheduler
         )
         editorHolder = editor
         // Arm the PNG editor through the realistic open path: loadEnd, then a successful
-        // extraction whose scene has one __baseline__ element. This sets pngSceneExtracted
-        // and seeds the baseline, so the empty-elements edit below counts as a real change.
+        // extraction whose scene has one __baseline__ element. This arms the autosave
+        // controller and seeds the baseline, so the empty-elements edit below counts as
+        // a real change.
         stubHost.fireLoadEnd()
         bridge.simulatePngExtracted(
             """{"type":"pngExtracted","sceneJson":${com.google.gson.Gson().toJson(
@@ -186,12 +188,12 @@ class PngEditorIntegrationTest {
             """{"type":"sceneChange","elements":[],"appState":{"viewBackgroundColor":"#ffffff"}}"""
         bridge.simulateSceneChange(scenePayload)
 
-        // Flush the debounce — this triggers the PNG export request
-        editor.flushDebounce()
+        // Flush the scheduler — this triggers the PNG export request
+        scheduler.flush()
 
         assertTrue(
             capturedJs.any { "__excalidrawExportPng__" in it },
-            "AC-E6-02: capturedJs must contain '__excalidrawExportPng__' after flushDebounce. " +
+            "AC-E6-02: capturedJs must contain '__excalidrawExportPng__' after flushing. " +
                 "Got: $capturedJs"
         )
 
@@ -235,6 +237,7 @@ class PngEditorIntegrationTest {
         val capturedJs = mutableListOf<String>()
         val capturedNotifications = mutableListOf<String>()
         val fakePersistence = FakePersistenceService()
+        val scheduler = com.swaroop.excalidraw.plugin.editor.autosave.ManualScheduler()
         var editorHolder: ExcalidrawFileEditor? = null
 
         val bridge = ExcalidrawJsBridge.createForTest(
@@ -252,7 +255,7 @@ class PngEditorIntegrationTest {
             bridge = bridge,
             persistenceService = fakePersistence,
             notifier = { msg -> capturedNotifications.add(msg) },
-            debounceExecutor = {}
+            scheduler = scheduler
         )
         editorHolder = editor
 
@@ -279,7 +282,7 @@ class PngEditorIntegrationTest {
         bridge.simulateSceneChange(
             """{"type":"sceneChange","elements":[{"type":"rectangle","id":"drawn"}],"appState":{}}"""
         )
-        editor.flushDebounce()
+        scheduler.flush()
         bridge.simulatePngExported(
             """{"type":"pngExported","base64Png":"$validBase64Png"}"""
         )

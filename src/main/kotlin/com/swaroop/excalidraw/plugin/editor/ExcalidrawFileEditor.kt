@@ -16,10 +16,13 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.util.UserDataHolderBase
 import com.intellij.openapi.vfs.VirtualFile
-import com.intellij.util.Alarm
 import com.swaroop.excalidraw.plugin.bridge.ExcalidrawJsBridge
 import com.swaroop.excalidraw.plugin.bridge.SceneChangeMessage
 import com.intellij.util.io.HttpRequests
+import com.swaroop.excalidraw.plugin.editor.autosave.AlarmScheduler
+import com.swaroop.excalidraw.plugin.editor.autosave.AutosaveController
+import com.swaroop.excalidraw.plugin.editor.autosave.ManualScheduler
+import com.swaroop.excalidraw.plugin.editor.autosave.Scheduler
 import com.swaroop.excalidraw.plugin.jcef.ExcalidrawJcefHost
 import com.swaroop.excalidraw.plugin.jcef.LibraryBrowserDialog
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawLibraryService
@@ -100,16 +103,12 @@ class ExcalidrawFileEditor private constructor(
     private val document: SceneDocument,
     private val notifier: (String) -> Unit,
     /**
-     * Optional test-mode override for the debounce scheduling mechanism.
-     *
-     * When non-null (injected via [createForTest]), the editor uses this executor
-     * instead of the real [Alarm] — the autosave runnable is stored in [pendingDebounce]
-     * and can be fired synchronously by calling [flushDebounce] in tests.
-     *
-     * When null (production path), the real [Alarm] schedules the autosave runnable
-     * after [AUTOSAVE_DEBOUNCE_MS] milliseconds on the EDT.
+     * Debounce seam for [autosave]'s scheduled writes. Null (production) resolves to
+     * an [AlarmScheduler] bound to this editor's lifetime; tests inject a
+     * [ManualScheduler] (fired synchronously and deterministically via
+     * [ManualScheduler.flush]).
      */
-    private val debounceExecutor: (() -> Unit)?,
+    private val scheduler: Scheduler?,
     /**
      * Optional [ExcalidrawThemeController] bound to this editor's lifecycle.
      *
@@ -141,8 +140,7 @@ class ExcalidrawFileEditor private constructor(
 
         /**
          * Phase 01 stub value for [isModified].
-         * Retained for backwards compatibility — real tracking uses [_modified].
-         * Full edit-tracking wired through the JS bridge comes in a future phase.
+         * Retained for backwards compatibility — real tracking is delegated to [autosave].
          */
         const val IS_MODIFIED_STUB: Boolean = false
 
@@ -279,7 +277,7 @@ class ExcalidrawFileEditor private constructor(
                 persistenceService = persistenceService,
                 document = document,
                 notifier = notifier,
-                debounceExecutor = null,
+                scheduler = null,
                 themeController = themeController
             ).also { editor ->
                 editorHolder = editor
@@ -308,10 +306,10 @@ class ExcalidrawFileEditor private constructor(
          * The [notifier] parameter lets tests assert that an error notification was
          * triggered (AC-E1-02) without requiring a live IDE notification subsystem.
          *
-         * The [debounceExecutor] parameter, when non-null, replaces the real [Alarm]-based
-         * debounce with a test-mode path: the autosave runnable is stored in the editor's
-         * [pendingDebounce] field and tests can fire it synchronously via [flushDebounce].
-         * When null (default), the production Alarm path is used.
+         * The [scheduler] parameter, when non-null, replaces the real [Alarm]-based
+         * debounce with a test-mode [Scheduler] (typically [ManualScheduler], fired
+         * synchronously and deterministically via [ManualScheduler.flush]).
+         * When null (default), the production [AlarmScheduler] is used.
          *
          * The [themeController] parameter, when non-null, is passed as a constructor field
          * so that [wireLoadEndCallback] can call [ExcalidrawThemeController.pushCurrentTheme]
@@ -334,7 +332,7 @@ class ExcalidrawFileEditor private constructor(
             notifier: (String) -> Unit = { message ->
                 LOG.warn("ExcalidrawFileEditor [test-mode] parse error: $message")
             },
-            debounceExecutor: (() -> Unit)? = null,
+            scheduler: Scheduler? = null,
             themeController: ExcalidrawThemeController? = null
         ): ExcalidrawFileEditor {
             val document: SceneDocument = if (isExcalidrawPng(file.name)) {
@@ -350,7 +348,7 @@ class ExcalidrawFileEditor private constructor(
                 persistenceService = persistenceService,
                 document = document,
                 notifier = notifier,
-                debounceExecutor = debounceExecutor,
+                scheduler = scheduler,
                 themeController = themeController
             ).also { editor ->
                 Disposer.register(editor, jcefHost)
@@ -366,117 +364,45 @@ class ExcalidrawFileEditor private constructor(
     }
 
     // -------------------------------------------------------------------------
-    // Auto-save debounce (task-04-004, AC-E3-01/E3-03)
+    // Auto-save & scene-change tracking (AD-05)
     // -------------------------------------------------------------------------
 
     /**
-     * Alarm bound to this editor's [Disposable] lifetime.
-     *
-     * Used in production (when [debounceExecutor] is null) to schedule the
-     * autosave work after [AUTOSAVE_DEBOUNCE_MS] milliseconds. Cancelled
-     * automatically when this editor is disposed (because it is Disposable-bound).
-     *
-     * Null when running in test mode ([debounceExecutor] non-null).
-     */
-    private val alarm: Alarm? = if (debounceExecutor == null) Alarm(Alarm.ThreadToUse.SWING_THREAD, this) else null
-
-    /**
-     * Tracks whether the editor has been disposed.
-     *
-     * Written by [dispose] and checked by [flushDebounce] / the alarm callback
-     * to prevent writes after disposal (no-write-after-dispose guarantee).
+     * Tracks whether the editor has been disposed — checked by [openLibraryBrowser]'s
+     * async callback to avoid touching a disposed bridge. [autosave] tracks its own,
+     * separate disposed state for its own callbacks (write results, scheduled runs).
      */
     @Volatile
     private var isDisposed: Boolean = false
 
-    /**
-     * In test mode, holds the most-recently scheduled autosave [Runnable].
-     *
-     * Set by [onSceneChanged] when [debounceExecutor] is non-null (test path).
-     * Each new [onSceneChanged] call replaces the previous runnable, implementing
-     * the debounce last-write-wins semantics without a real Alarm.
-     * [flushDebounce] executes this runnable synchronously (if the editor is not disposed).
-     */
-    @Volatile
-    internal var pendingDebounce: Runnable? = null
-
-    /**
-     * Test helper: fires the most-recently scheduled debounce runnable synchronously.
-     *
-     * No-op if the editor is disposed or no runnable is pending.
-     * Only meaningful when [debounceExecutor] was injected (test mode).
-     */
-    fun flushDebounce() {
-        if (!isDisposed) {
-            pendingDebounce?.run()
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    // Scene-change tracking (task-03-004, AD-05)
-    // -------------------------------------------------------------------------
-
-    /**
-     * Tracks whether the scene has been modified since the last save.
-     *
-     * Written exclusively on the EDT (guaranteed by the bridge's invokeLater
-     * dispatch, AD-05). Volatile ensures visibility from any thread that calls
-     * [isModified].
-     */
-    @Volatile
-    private var _modified: Boolean = false
-
-    /**
-     * Canonical element content of the loaded (or last-saved) scene, used to tell a
-     * real user edit apart from a no-op [onSceneChanged].
-     *
-     * Excalidraw fires `onChange` not only on edits but also on the initial scene
-     * load and on theme/font re-renders, selection, scroll, etc. Persisting those
-     * would rewrite the file on mere open — and because `.excalidraw.png` files are
-     * re-encoded on export, that shows up as a spurious git change for every file
-     * opened. We therefore only mark the editor modified / schedule an autosave when
-     * the element content differs from this baseline (volatile per-element fields are
-     * stripped — see [canonicalElements]).
-     *
-     * Null until the first [onSceneChanged] establishes the baseline from the loaded
-     * scene. Written exclusively on the EDT (AD-05).
-     */
-    @Volatile
-    private var baselineElements: String? = null
-
-    /**
-     * Whether [document] has produced a definitive load outcome for this file yet.
-     *
-     * Some formats' load protocol round-trips through the bridge asynchronously (PNG
-     * extraction); before that round-trip settles, the canvas may hold stale/unrelated
-     * state (e.g. an early `onChange` fired during page mount), so a real edit can't yet
-     * be told apart from that noise. While this is false, [onSceneChanged] drops events
-     * entirely — no baseline update, no autosave. It is set to true exactly when
-     * [wireLoadEndCallback]'s `document.load` callback fires with a non-[SceneLoadResult.Failed]
-     * result (for a synchronous format like plain JSON, that happens before any `onChange`
-     * could possibly arrive, so this flag never actually gates that format in practice).
-     *
-     * Written exclusively on the EDT (AD-05); volatile for cross-thread visibility.
-     */
-    @Volatile
-    private var sceneReady: Boolean = false
-
-    /**
-     * The most-recently received scene state, serialised as a JSON string via
-     * [Gson.toJson]. Null until the first [onSceneChanged] call.
-     *
-     * Handover field for phase-04 auto-save: the auto-save writer reads this
-     * value to determine what to persist.
-     *
-     * Written exclusively on the EDT (AD-05). Declared as `@Volatile` to ensure
-     * cross-thread visibility without requiring synchronised reads.
-     */
-    @Volatile
-    var currentSceneJson: String? = null
-        private set
-
     /** Propagates PROP_MODIFIED change events to registered [PropertyChangeListener]s. */
     private val propertyChangeSupport: PropertyChangeSupport = PropertyChangeSupport(this)
+
+    /**
+     * Owns the autosave + change-detection state machine (see [AutosaveController]):
+     * [currentSceneJson], [isModified], baseline tracking, and the debounced write
+     * trigger. [scheduler] is the debounce seam ([AlarmScheduler] bound to this
+     * editor's lifetime in production, an injected [ManualScheduler] in tests).
+     * [onModifiedChanged] re-fires the exact PROP_MODIFIED event [onSceneChanged] /
+     * the old `scheduleAutosave` used to fire separately. [write] delegates the
+     * actual persistence to [document] — the controller itself is format-agnostic.
+     */
+    private val autosave: AutosaveController = AutosaveController(
+        scheduler = scheduler ?: AlarmScheduler(this),
+        debounceMs = AUTOSAVE_DEBOUNCE_MS,
+        onModifiedChanged = { isModifiedNow ->
+            propertyChangeSupport.firePropertyChange(FileEditor.getPropModified(), !isModifiedNow, isModifiedNow)
+        },
+        write = { json, onResult -> document.save(file, json, bridge, onResult) }
+    )
+
+    /**
+     * The most-recently received scene state. Null until the first [onSceneChanged] call
+     * (or, for a format whose load protocol reconciles the canvas up front, until load
+     * completes — see [SceneDocument]/[AutosaveController.arm]). Delegates to [autosave].
+     */
+    val currentSceneJson: String?
+        get() = autosave.currentSceneJson
 
     // -------------------------------------------------------------------------
     // Private panel used in test mode (no real JCEF component available)
@@ -499,14 +425,14 @@ class ExcalidrawFileEditor private constructor(
      * onLoadEnd (AD-04). It delegates the format-specific work (plain JSON vs
      * scene-embedded PNG) entirely to [document] (see [SceneDocument]) and only
      * interprets the sealed [SceneLoadResult] it reports back:
-     *  - [SceneLoadResult.LoadedAndBaselined]: seeds [currentSceneJson] and
-     *    [baselineElements] immediately (the format's own round-trip already
-     *    reconciled the canvas against the file).
-     *  - [SceneLoadResult.LoadedAwaitingEcho]: nothing to seed yet — the canvas's
-     *    own first `onChange` establishes the baseline (see [onSceneChanged]).
-     *  - [SceneLoadResult.Failed]: [notifier] is called (AD-03); no VirtualFile write.
-     * Either way, [sceneReady] is set once the outcome is known, so [onSceneChanged]
-     * knows whether the canvas can be trusted yet. [ExcalidrawThemeController.pushCurrentTheme]
+     *  - [SceneLoadResult.LoadedAndBaselined]: [AutosaveController.arm] seeds
+     *    [currentSceneJson] and the change-detection baseline immediately (the
+     *    format's own round-trip already reconciled the canvas against the file).
+     *  - [SceneLoadResult.LoadedAwaitingEcho]: [AutosaveController.awaitEcho] arms
+     *    event processing; the canvas's own first `onChange` establishes the
+     *    baseline instead (see [onSceneChanged]).
+     *  - [SceneLoadResult.Failed]: [notifier] is called (AD-03); no VirtualFile write,
+     *    [autosave] is left unarmed. [ExcalidrawThemeController.pushCurrentTheme]
      * and [restorePersistedLibrary] run right after triggering the load, skipped only on
      * a (synchronous) load failure.
      *
@@ -527,16 +453,12 @@ class ExcalidrawFileEditor private constructor(
                 var failed = false
                 document.load(file, bridge) { result ->
                     when (result) {
-                        is SceneLoadResult.LoadedAndBaselined -> {
-                            currentSceneJson = result.sceneJson
-                            baselineElements = canonicalElements(elementsOf(result.sceneJson))
-                            sceneReady = true
-                        }
+                        is SceneLoadResult.LoadedAndBaselined -> autosave.arm(result.sceneJson)
                         SceneLoadResult.LoadedAwaitingEcho -> {
                             // The canvas will fire its own render/onChange echo once mounted;
                             // that first onSceneChanged call establishes the baseline instead
                             // (see the `baseline == null` branch there).
-                            sceneReady = true
+                            autosave.awaitEcho()
                         }
                         is SceneLoadResult.Failed -> {
                             // AD-03: invoke the notifier hook, do NOT write VirtualFile.
@@ -626,70 +548,20 @@ class ExcalidrawFileEditor private constructor(
     /**
      * Called when the Excalidraw web app posts a scene-change event over the bridge.
      *
-     * Runs on the EDT (the bridge dispatches via `invokeLater`, AD-05).
-     * As a defensive measure, this method re-routes to the EDT if called from
-     * an unexpected thread — ensuring [_modified] and [currentSceneJson] are
-     * always written on the correct thread.
+     * Runs on the EDT (the bridge dispatches via `invokeLater`, AD-05). As a defensive
+     * measure, this method re-routes to the EDT if called from an unexpected thread.
      *
-     * Actions performed:
-     * 1. Serialises [scene] to a JSON string via [Gson.toJson] and stores it in
-     *    [currentSceneJson] (handover field for phase-04 auto-save).
-     * 2. Sets [_modified] to `true`.
-     * 3. Fires a PROP_MODIFIED property-change event so that registered
-     *    [PropertyChangeListener]s (e.g. the IDE's document-modified tracking)
-     *    are notified.
+     * A thin adapter: serialises [scene] to a JSON string via [Gson.toJson] and hands
+     * it, along with the raw `elements` array, to [AutosaveController.onSceneChanged] —
+     * all dirty-tracking, baseline comparison, and debounced-write scheduling lives
+     * there now (including PROP_MODIFIED firing, wired once at [autosave]'s construction).
      *
-     * A03: [scene] originates from the Excalidraw web app and is already
-     * deserialised via Gson at the bridge layer — no raw string concatenation
-     * or code execution occurs here.
+     * A03: [scene] originates from the Excalidraw web app and is already deserialised
+     * via Gson at the bridge layer — no raw string concatenation or code execution here.
      */
     fun onSceneChanged(scene: SceneChangeMessage) {
         val work: () -> Unit = {
-            // Only formats whose load protocol round-trips asynchronously (PNG extraction)
-            // need this gate: plain JSON's load either fully completes before any onChange
-            // could arrive, or never ran at all (e.g. some tests drive onSceneChanged
-            // directly) — in both cases the first onChange safely establishes the baseline
-            // below. Deliberately still format-specific: fully retiring this fork is #109's
-            // job (lift dirty-tracking into a format-agnostic AutosaveController).
-            if (isExcalidrawPng(file.name) && !sceneReady) {
-                // The document's load protocol hasn't produced a definitive outcome yet
-                // (the PNG extraction round-trip is still in flight). The canvas may
-                // hold stale/unrelated state, so the event is dropped entirely: autosave
-                // must never overwrite the file with content that did not come from it.
-                // currentSceneJson is deliberately left untouched so no later export can
-                // pick up this state.
-                LOG.debug("onSceneChanged ignored: document not yet ready for '${file.path}'")
-            } else {
-                currentSceneJson = GSON.toJson(scene)
-                val newCanonical = canonicalElements(scene.elements)
-                val baseline = baselineElements
-                when {
-                    baseline == null -> {
-                        // First change after load: this reflects the unedited scene
-                        // (Excalidraw fires onChange once the loaded scene renders).
-                        // Record it as the baseline; do NOT mark modified or write —
-                        // opening a file must not change it on disk.
-                        baselineElements = newCanonical
-                    }
-                    newCanonical == baseline -> {
-                        // No element-content change (theme/font re-render, selection,
-                        // scroll, …). Keep the latest scene JSON but do not persist.
-                    }
-                    else -> {
-                        // Genuine user edit: advance the baseline and schedule a save.
-                        baselineElements = newCanonical
-                        val wasModified = _modified
-                        _modified = true
-                        if (!wasModified) {
-                            // FileEditor.getPropModified() returns "modified" — use the method
-                            // instead of a non-existent PROP_MODIFIED field (IntelliJ API).
-                            propertyChangeSupport.firePropertyChange(FileEditor.getPropModified(), false, true)
-                        }
-                        // Schedule (or reschedule) the debounced auto-save (task-04-004, AC-E3-01).
-                        scheduleAutosave()
-                    }
-                }
-            }
+            autosave.onSceneChanged(GSON.toJson(scene), scene.elements)
         }
 
         val application = ApplicationManager.getApplication()
@@ -697,103 +569,6 @@ class ExcalidrawFileEditor private constructor(
             application.invokeLater(work)
         } else {
             work()
-        }
-    }
-
-    /**
-     * Returns a stable string representation of [elements] for change detection,
-     * with per-element fields that churn without a meaningful content change
-     * (`version`, `versionNonce`, `updated`) removed. Operates on a deep copy so the
-     * incoming [elements] are not mutated.
-     */
-    private fun canonicalElements(elements: JsonArray): String {
-        val copy = elements.deepCopy()
-        for (element in copy) {
-            if (element.isJsonObject) {
-                val obj = element.asJsonObject
-                obj.remove("version")
-                obj.remove("versionNonce")
-                obj.remove("updated")
-            }
-        }
-        return copy.toString()
-    }
-
-    /**
-     * Extracts the `elements` array from a serialised Excalidraw scene JSON string,
-     * returning an empty array when the input is null/blank/malformed or has no
-     * `elements` field. Used to seed the change-detection baseline from the scene
-     * extracted from a `.excalidraw.png` at open time.
-     */
-    private fun elementsOf(sceneJson: String?): JsonArray {
-        if (sceneJson.isNullOrBlank()) return JsonArray()
-        return try {
-            JsonParser.parseString(sceneJson)
-                ?.takeIf { it.isJsonObject }
-                ?.asJsonObject
-                ?.getAsJsonArray("elements")
-                ?: JsonArray()
-        } catch (_: Exception) {
-            JsonArray()
-        }
-    }
-
-    /**
-     * Schedules a debounced autosave of [currentSceneJson].
-     *
-     * In production (Alarm path): cancels any pending alarm request and schedules a new one
-     * after [AUTOSAVE_DEBOUNCE_MS] milliseconds. This ensures only the final scene in a rapid
-     * sequence of changes is written (last-write-wins, AC-E3-01).
-     *
-     * In test mode ([debounceExecutor] non-null): stores the autosave work in [pendingDebounce]
-     * (replacing any previously scheduled work) without real timer involvement.
-     * Tests call [flushDebounce] to execute the stored work synchronously.
-     *
-     * [document] owns the format-specific write (synchronous for plain JSON, async via a
-     * bridge round-trip for PNG re-export — see [SceneDocument]); this method only
-     * interprets the sealed [SceneSaveResult] it reports back:
-     *  - [SceneSaveResult.Saved]: clears [_modified], fires PROP_MODIFIED (true → false).
-     *  - [SceneSaveResult.Failed]: logs a warning; does NOT touch [_modified] (no write
-     *    occurred).
-     *  - [SceneSaveResult.Skipped]: no-op (e.g. a PNG save requested before its load
-     *    round-trip armed itself) — not logged, this is an expected, silent skip.
-     */
-    private fun scheduleAutosave() {
-        val autosaveWork = Runnable {
-            if (isDisposed) return@Runnable
-            val json = currentSceneJson ?: return@Runnable
-
-            // A03: sceneJson only ever flows through Gson-mediated (de)serialisation on
-            // its way to/from the bridge and VFS — no raw string concatenation.
-            document.save(file, json, bridge) { result ->
-                if (isDisposed) return@save
-                when (result) {
-                    SceneSaveResult.Saved -> {
-                        val wasModified = _modified
-                        _modified = false
-                        if (wasModified) {
-                            propertyChangeSupport.firePropertyChange(FileEditor.getPropModified(), true, false)
-                        }
-                    }
-                    is SceneSaveResult.Failed -> {
-                        // No write on error (A09): log at WARN level; _modified stays true.
-                        LOG.warn("ExcalidrawFileEditor: save error for '${file.path}': ${result.message}")
-                    }
-                    SceneSaveResult.Skipped -> {
-                        // Expected, silent no-op — not an error.
-                    }
-                }
-            }
-        }
-
-        if (debounceExecutor != null) {
-            // Test mode: store the runnable for manual firing via flushDebounce().
-            pendingDebounce = autosaveWork
-            debounceExecutor.invoke()
-        } else {
-            // Production mode: use real Alarm debounce.
-            alarm?.cancelAllRequests()
-            alarm?.addRequest(autosaveWork, AUTOSAVE_DEBOUNCE_MS.toInt())
         }
     }
 
@@ -871,12 +646,12 @@ class ExcalidrawFileEditor private constructor(
 
     /**
      * Returns true when a scene-change event has been received via [onSceneChanged]
-     * since the last save. Returns false initially and after a save clears the flag
-     * (auto-save phase-04 will reset [_modified]).
+     * since the last save. Returns false initially and after a save clears the flag.
+     * Delegates to [AutosaveController.isModified].
      *
      * [IS_MODIFIED_STUB] is retained as a companion constant for backward compatibility.
      */
-    override fun isModified(): Boolean = _modified
+    override fun isModified(): Boolean = autosave.isModified
 
     /** Returns true — full VFS-lifecycle checks (file deleted/moved) out of scope here. */
     override fun isValid(): Boolean = IS_VALID_STUB
@@ -929,18 +704,15 @@ class ExcalidrawFileEditor private constructor(
      * so the IDE's disposal chain calls their [dispose] methods automatically.
      * AD-3: clean dispose chain — no JCEF browser leaks.
      *
-     * Auto-save cleanup (task-04-004):
-     * - Sets [isDisposed] to prevent any pending autosave from writing after disposal.
-     * - Cancels all pending [alarm] requests (production path) so no EDT callback
-     *   fires after the editor is gone.
-     * - In test mode, clears [pendingDebounce] so [flushDebounce] becomes a no-op.
+     * Auto-save cleanup:
+     * - Sets [isDisposed] to guard this editor's own async callbacks (e.g. the library
+     *   browser's).
+     * - [AutosaveController.dispose] cancels its scheduler (no write after dispose) and
+     *   its own callbacks become no-ops.
      */
     override fun dispose() {
         isDisposed = true
-        // Cancel the real Alarm (production path) — no write after dispose (AC-E3, no-leak).
-        alarm?.cancelAllRequests()
-        // Clear the test-mode pending runnable — flushDebounce() must be a no-op after dispose.
-        pendingDebounce = null
+        autosave.dispose()
         // Child-Disposable cleanup is handled automatically by the Disposer framework.
     }
 }
