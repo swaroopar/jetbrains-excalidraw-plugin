@@ -64,7 +64,9 @@ class ExcalidrawFileEditorEditTest {
             }
         )
 
-        val file = StubVirtualFile("test.excalidraw", "{}".toByteArray(Charsets.UTF_8))
+        // Blank content: readSceneOrNew opens it as a fresh blank canvas, so fireLoadEnd()
+        // below succeeds and arms the autosave controller (AC-E4-01/AD-04).
+        val file = StubVirtualFile("test.excalidraw", "".toByteArray(Charsets.UTF_8))
         val host = ExcalidrawJcefHost.createForTest()
 
         val editor = ExcalidrawFileEditor.createForTest(
@@ -76,6 +78,10 @@ class ExcalidrawFileEditorEditTest {
         )
 
         editorHolder = editor
+        // Real open path: arms the autosave controller before any scene-change event
+        // can arrive (plain JSON has no separate round-trip, so this always settles
+        // synchronously before onSceneChanged could possibly be called).
+        host.fireLoadEnd()
         // Establish the unedited baseline (mirrors the initial onChange Excalidraw
         // fires when a scene loads), so subsequent distinct payloads count as real
         // edits. Uses an element type none of the test payloads use.
