@@ -1,9 +1,12 @@
 package com.swaroop.excalidraw.plugin.persistence.document
 
+import com.google.gson.JsonArray
+import com.google.gson.JsonObject
 import com.intellij.openapi.vfs.VirtualFile
 import com.swaroop.excalidraw.plugin.bridge.ExcalidrawJsBridge
 import com.swaroop.excalidraw.plugin.editor.StubVirtualFile
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawPersistenceService
+import com.swaroop.excalidraw.plugin.persistence.Scene
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -61,27 +64,27 @@ class JsonSceneDocumentTest {
 
     private class RecordingPersistenceService : ExcalidrawPersistenceService() {
         var writeSceneCallCount = 0
-        var lastWrittenJson: String? = null
+        var lastWrittenScene: Scene? = null
 
-        override fun writeScene(file: VirtualFile, json: String) {
+        override fun writeScene(file: VirtualFile, scene: Scene) {
             writeSceneCallCount++
-            lastWrittenJson = json
+            lastWrittenScene = scene
         }
     }
 
     @Test
-    fun `save normalizes json via serializer and writes exactly once, reporting Saved`() {
+    fun `save delegates directly to persistenceService writeScene, reporting Saved`() {
         val fakePersistence = RecordingPersistenceService()
         val document = JsonSceneDocument(fakePersistence)
         val bridge = ExcalidrawJsBridge.createForTest(injector = { _ -> })
         val file = StubVirtualFile("scene.excalidraw", ByteArray(0))
+        val scene = Scene("excalidraw", 2, null, JsonArray(), JsonObject(), null)
 
         var result: SceneSaveResult? = null
-        document.save(file, """{"type":"excalidraw","elements":[],"appState":{}}""", bridge) { result = it }
+        document.save(file, scene, bridge) { result = it }
 
         assertEquals(1, fakePersistence.writeSceneCallCount)
-        assertTrue(fakePersistence.lastWrittenJson!!.contains("\"version\""),
-            "written json must be normalized by ExcalidrawSerializer (adds default fields)")
+        assertEquals(scene, fakePersistence.lastWrittenScene)
         assertEquals(SceneSaveResult.Saved, result)
     }
 }

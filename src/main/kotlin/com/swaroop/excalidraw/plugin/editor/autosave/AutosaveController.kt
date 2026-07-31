@@ -1,13 +1,12 @@
 package com.swaroop.excalidraw.plugin.editor.autosave
 
-import com.google.gson.JsonArray
-import com.google.gson.JsonParser
 import com.intellij.openapi.diagnostic.Logger
+import com.swaroop.excalidraw.plugin.persistence.Scene
 import com.swaroop.excalidraw.plugin.persistence.document.SceneSaveResult
 
 /**
  * Owns the autosave + change-detection state machine for one open scene: the
- * current scene JSON, the dirty/[isModified] flag, the debounced write trigger,
+ * current [Scene], the dirty/[isModified] flag, the debounced write trigger,
  * and telling a real user edit apart from a no-op `onChange` (theme re-render,
  * selection, scroll, the initial load echo).
  *
@@ -20,29 +19,29 @@ import com.swaroop.excalidraw.plugin.persistence.document.SceneSaveResult
  * @param scheduler debounce seam — [AlarmScheduler] in production, [ManualScheduler] in tests.
  * @param debounceMs delay between the last scene change and the write it triggers.
  * @param onModifiedChanged invoked exactly on each false↔true transition of [isModified].
- * @param write persists [sceneJson][String]; reports [SceneSaveResult] back via its callback.
+ * @param write persists a [Scene]; reports [SceneSaveResult] back via its callback.
  */
 class AutosaveController(
     private val scheduler: Scheduler,
     private val debounceMs: Long,
     private val onModifiedChanged: (Boolean) -> Unit,
-    private val write: (sceneJson: String, onResult: (SceneSaveResult) -> Unit) -> Unit
+    private val write: (scene: Scene, onResult: (SceneSaveResult) -> Unit) -> Unit
 ) {
 
     companion object {
         private val LOG: Logger = Logger.getInstance(AutosaveController::class.java)
     }
 
-    /** The most-recently received scene state. Null until [arm] or the first [onSceneChanged]. */
+    /** The most-recently received scene. Null until [arm] or the first [onSceneChanged]. */
     @Volatile
-    var currentSceneJson: String? = null
+    var currentScene: Scene? = null
         private set
 
     @Volatile
-    private var baselineElements: String? = null
+    private var baselineKey: String? = null
 
     /**
-     * Whether the load that produced the current [currentSceneJson] has settled — until this
+     * Whether the load that produced the current [currentScene] has settled — until this
      * is true, [onSceneChanged] drops events entirely (the canvas may hold stale/unrelated
      * state; see [arm]/[awaitEcho]).
      */
@@ -60,12 +59,12 @@ class AutosaveController(
 
     /**
      * The format's load protocol already reconciled the canvas against the file (e.g. a PNG
-     * extraction round-trip) — seed [currentSceneJson] and the change-detection baseline from
-     * [sceneJson] immediately and arm event processing.
+     * extraction round-trip) — seed [currentScene] and the change-detection baseline from
+     * [scene] immediately and arm event processing.
      */
-    fun arm(sceneJson: String) {
-        currentSceneJson = sceneJson
-        baselineElements = canonicalElements(elementsOf(sceneJson))
+    fun arm(scene: Scene) {
+        currentScene = scene
+        baselineKey = scene.contentKey()
         ready = true
     }
 
@@ -85,19 +84,19 @@ class AutosaveController(
      * a genuine edit, which advances the baseline, flips [isModified] to true (firing
      * [onModifiedChanged] on the false→true transition), and (re)schedules a debounced write.
      */
-    fun onSceneChanged(sceneJson: String, elements: JsonArray) {
+    fun onSceneChanged(scene: Scene) {
         if (!ready) {
             LOG.debug("onSceneChanged ignored: controller not yet armed")
             return
         }
-        currentSceneJson = sceneJson
-        val newCanonical = canonicalElements(elements)
-        val baseline = baselineElements
+        currentScene = scene
+        val newKey = scene.contentKey()
+        val baseline = baselineKey
         when {
-            baseline == null -> baselineElements = newCanonical
-            newCanonical == baseline -> { /* no meaningful content change */ }
+            baseline == null -> baselineKey = newKey
+            newKey == baseline -> { /* no meaningful content change */ }
             else -> {
-                baselineElements = newCanonical
+                baselineKey = newKey
                 setModified(true)
                 scheduleWrite()
             }
@@ -113,8 +112,8 @@ class AutosaveController(
     private fun scheduleWrite() {
         scheduler.schedule(debounceMs) {
             if (disposed) return@schedule
-            val json = currentSceneJson ?: return@schedule
-            write(json) { result ->
+            val scene = currentScene ?: return@schedule
+            write(scene) { result ->
                 if (disposed) return@write
                 when (result) {
                     SceneSaveResult.Saved -> setModified(false)
@@ -130,41 +129,6 @@ class AutosaveController(
         if (modified != value) {
             modified = value
             onModifiedChanged(value)
-        }
-    }
-
-    /**
-     * Returns a stable string representation of [elements] for change detection, with
-     * per-element fields that churn without a meaningful content change (`version`,
-     * `versionNonce`, `updated`) removed. Operates on a deep copy so [elements] is not mutated.
-     */
-    private fun canonicalElements(elements: JsonArray): String {
-        val copy = elements.deepCopy()
-        for (element in copy) {
-            if (element.isJsonObject) {
-                val obj = element.asJsonObject
-                obj.remove("version")
-                obj.remove("versionNonce")
-                obj.remove("updated")
-            }
-        }
-        return copy.toString()
-    }
-
-    /**
-     * Extracts the `elements` array from a serialised scene JSON string, returning an empty
-     * array when the input is null/blank/malformed or has no `elements` field.
-     */
-    private fun elementsOf(sceneJson: String?): JsonArray {
-        if (sceneJson.isNullOrBlank()) return JsonArray()
-        return try {
-            JsonParser.parseString(sceneJson)
-                ?.takeIf { it.isJsonObject }
-                ?.asJsonObject
-                ?.getAsJsonArray("elements")
-                ?: JsonArray()
-        } catch (_: Exception) {
-            JsonArray()
         }
     }
 }

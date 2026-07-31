@@ -1,6 +1,5 @@
 package com.swaroop.excalidraw.plugin.editor
 
-import com.google.gson.Gson
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
@@ -17,7 +16,6 @@ import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.util.UserDataHolderBase
 import com.intellij.openapi.vfs.VirtualFile
 import com.swaroop.excalidraw.plugin.bridge.ExcalidrawJsBridge
-import com.swaroop.excalidraw.plugin.bridge.SceneChangeMessage
 import com.intellij.util.io.HttpRequests
 import com.swaroop.excalidraw.plugin.editor.autosave.AlarmScheduler
 import com.swaroop.excalidraw.plugin.editor.autosave.AutosaveController
@@ -28,6 +26,7 @@ import com.swaroop.excalidraw.plugin.jcef.LibraryBrowserDialog
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawLibraryService
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawParseException
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawPersistenceService
+import com.swaroop.excalidraw.plugin.persistence.Scene
 import com.swaroop.excalidraw.plugin.persistence.document.JsonSceneDocument
 import com.swaroop.excalidraw.plugin.persistence.document.PngSceneDocument
 import com.swaroop.excalidraw.plugin.persistence.document.SceneDocument
@@ -128,9 +127,6 @@ class ExcalidrawFileEditor private constructor(
 
     companion object {
         private val LOG: Logger = Logger.getInstance(ExcalidrawFileEditor::class.java)
-
-        /** Shared Gson instance for serialising [SceneChangeMessage] to JSON string. */
-        private val GSON: Gson = Gson()
 
         /**
          * Human-readable editor name shown in the IDE tab and "Open with" menu.
@@ -397,12 +393,14 @@ class ExcalidrawFileEditor private constructor(
     )
 
     /**
-     * The most-recently received scene state. Null until the first [onSceneChanged] call
-     * (or, for a format whose load protocol reconciles the canvas up front, until load
-     * completes — see [SceneDocument]/[AutosaveController.arm]). Delegates to [autosave].
+     * The most-recently received scene, as canonical JSON ([Scene.toCanonicalJson]). Null
+     * until the first [onSceneChanged] call (or, for a format whose load protocol reconciles
+     * the canvas up front, until load completes — see [SceneDocument]/[AutosaveController.arm]).
+     * Delegates to [autosave]; kept as a `String` here only for external/test convenience —
+     * [AutosaveController.currentScene] is the real, structured source of truth.
      */
     val currentSceneJson: String?
-        get() = autosave.currentSceneJson
+        get() = autosave.currentScene?.toCanonicalJson()
 
     // -------------------------------------------------------------------------
     // Private panel used in test mode (no real JCEF component available)
@@ -453,7 +451,7 @@ class ExcalidrawFileEditor private constructor(
                 var failed = false
                 document.load(file, bridge) { result ->
                     when (result) {
-                        is SceneLoadResult.LoadedAndBaselined -> autosave.arm(result.sceneJson)
+                        is SceneLoadResult.LoadedAndBaselined -> autosave.arm(result.scene)
                         SceneLoadResult.LoadedAwaitingEcho -> {
                             // The canvas will fire its own render/onChange echo once mounted;
                             // that first onSceneChanged call establishes the baseline instead
@@ -551,17 +549,18 @@ class ExcalidrawFileEditor private constructor(
      * Runs on the EDT (the bridge dispatches via `invokeLater`, AD-05). As a defensive
      * measure, this method re-routes to the EDT if called from an unexpected thread.
      *
-     * A thin adapter: serialises [scene] to a JSON string via [Gson.toJson] and hands
-     * it, along with the raw `elements` array, to [AutosaveController.onSceneChanged] —
-     * all dirty-tracking, baseline comparison, and debounced-write scheduling lives
-     * there now (including PROP_MODIFIED firing, wired once at [autosave]'s construction).
+     * A thin adapter: hands [scene] directly to [AutosaveController.onSceneChanged] — all
+     * dirty-tracking, baseline comparison, and debounced-write scheduling lives there now
+     * (including PROP_MODIFIED firing, wired once at [autosave]'s construction). No
+     * re-serialization happens here: [scene] is already a fully-parsed [Scene], not a raw
+     * JSON string, so this boundary is a single Gson hop, not two.
      *
      * A03: [scene] originates from the Excalidraw web app and is already deserialised
      * via Gson at the bridge layer — no raw string concatenation or code execution here.
      */
-    fun onSceneChanged(scene: SceneChangeMessage) {
+    fun onSceneChanged(scene: Scene) {
         val work: () -> Unit = {
-            autosave.onSceneChanged(GSON.toJson(scene), scene.elements)
+            autosave.onSceneChanged(scene)
         }
 
         val application = ApplicationManager.getApplication()

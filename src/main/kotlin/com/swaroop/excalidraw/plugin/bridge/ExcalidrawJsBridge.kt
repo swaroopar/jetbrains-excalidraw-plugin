@@ -9,7 +9,7 @@ import com.intellij.openapi.diagnostic.Logger
 import com.intellij.ui.jcef.JBCefBrowser
 import com.intellij.ui.jcef.JBCefJSQuery
 import com.swaroop.excalidraw.plugin.export.ExportMessage
-import com.swaroop.excalidraw.plugin.persistence.ExcalidrawScene
+import com.swaroop.excalidraw.plugin.persistence.Scene
 
 /**
  * ExcalidrawJsBridge — typed bidirectional channel between Kotlin and the
@@ -46,7 +46,7 @@ class ExcalidrawJsBridge private constructor(
     private val injector: (String) -> Unit,
     private val readyHandler: (String) -> Unit,
     private val jsQueryDispose: (() -> Unit)?,
-    private val sceneChangeHandler: (SceneChangeMessage) -> Unit = {},
+    private val sceneChangeHandler: (Scene) -> Unit = {},
     /**
      * Produces the JS expression that sends a payload string to the Kotlin
      * [JBCefJSQuery] handler.  In production this is [JBCefJSQuery.inject];
@@ -117,7 +117,7 @@ class ExcalidrawJsBridge private constructor(
      *     `window.__excalidrawLoadScene__("{\"type\":\"loadScene\",...}")`
      *   where the inner payload is a pure JSON string with no executable code.
      */
-    fun loadScene(scene: ExcalidrawScene) {
+    fun loadScene(scene: Scene) {
         val json = BridgeMessage.LoadScene(scene).toJson()
         callJsFunction(LOAD_SCENE_FN, json)
     }
@@ -802,7 +802,7 @@ class ExcalidrawJsBridge private constructor(
         fun create(
             browser: JBCefBrowser,
             readyHandler: (String) -> Unit = {},
-            sceneChangeHandler: (SceneChangeMessage) -> Unit = {}
+            sceneChangeHandler: (Scene) -> Unit = {}
         ): ExcalidrawJsBridge {
             val jsQuery = JBCefJSQuery.create(browser)
             // Separate query for the clipboard request/response round-trip (its handler
@@ -861,7 +861,7 @@ class ExcalidrawJsBridge private constructor(
         fun createForTest(
             injector: (String) -> Unit,
             readyHandler: (String) -> Unit = {},
-            sceneChangeHandler: (SceneChangeMessage) -> Unit = {}
+            sceneChangeHandler: (Scene) -> Unit = {}
         ): ExcalidrawJsBridge = ExcalidrawJsBridge(
             injector = injector,
             readyHandler = readyHandler,

@@ -1,19 +1,23 @@
 package com.swaroop.excalidraw.plugin.bridge
 
+import com.google.gson.JsonArray
+import com.google.gson.JsonObject
 import com.google.gson.JsonParser
-import com.swaroop.excalidraw.plugin.persistence.ExcalidrawScene
+import com.swaroop.excalidraw.plugin.persistence.Scene
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class BridgeMessageTest {
 
-    private fun fixtureScene(): ExcalidrawScene = ExcalidrawScene(
+    private fun fixtureScene(): Scene = Scene(
         type = "excalidraw",
         version = 2,
         source = "https://excalidraw.com",
-        elements = listOf(mapOf("id" to "elem-1", "type" to "rectangle")),
-        appState = mapOf("viewBackgroundColor" to "#ffffff"),
+        elements = JsonArray().apply {
+            add(JsonObject().apply { addProperty("id", "elem-1"); addProperty("type", "rectangle") })
+        },
+        appState = JsonObject().apply { addProperty("viewBackgroundColor", "#ffffff") },
         files = null
     )
 

@@ -2,7 +2,7 @@ package com.swaroop.excalidraw.plugin.editor
 
 import com.intellij.openapi.vfs.VirtualFile
 import com.swaroop.excalidraw.plugin.bridge.ExcalidrawJsBridge
-import com.swaroop.excalidraw.plugin.bridge.SceneChangeMessage
+import com.swaroop.excalidraw.plugin.persistence.Scene
 import com.swaroop.excalidraw.plugin.jcef.ExcalidrawJcefHost
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawPersistenceService
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -45,7 +45,7 @@ class PngEditorIntegrationTest {
         var writeSceneCallCount: Int = 0
         var writePngSceneCallCount: Int = 0
 
-        override fun writeScene(file: VirtualFile, json: String) {
+        override fun writeScene(file: VirtualFile, scene: Scene) {
             writeSceneCallCount++
         }
 
@@ -156,7 +156,7 @@ class PngEditorIntegrationTest {
 
         val bridge = ExcalidrawJsBridge.createForTest(
             injector = { js -> capturedJs.add(js) },
-            sceneChangeHandler = { scene: SceneChangeMessage ->
+            sceneChangeHandler = { scene: Scene ->
                 editorHolder?.onSceneChanged(scene)
             }
         )
@@ -242,7 +242,7 @@ class PngEditorIntegrationTest {
 
         val bridge = ExcalidrawJsBridge.createForTest(
             injector = { js -> capturedJs.add(js) },
-            sceneChangeHandler = { scene: SceneChangeMessage ->
+            sceneChangeHandler = { scene: Scene ->
                 editorHolder?.onSceneChanged(scene)
             }
         )

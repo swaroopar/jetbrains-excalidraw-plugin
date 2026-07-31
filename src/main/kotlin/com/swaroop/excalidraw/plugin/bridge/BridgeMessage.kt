@@ -4,7 +4,7 @@ import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.google.gson.JsonSyntaxException
 import com.swaroop.excalidraw.plugin.export.ExportMessage
-import com.swaroop.excalidraw.plugin.persistence.ExcalidrawScene
+import com.swaroop.excalidraw.plugin.persistence.Scene
 
 /**
  * Typed message hierarchy for the Kotlin-to-JS (and JS-to-Kotlin) bridge channel.
@@ -19,9 +19,9 @@ sealed class BridgeMessage {
      *
      * [toJson] produces a JSON object with two top-level fields:
      * - `type`: always `"loadScene"`
-     * - `scene`: the serialised [ExcalidrawScene]
+     * - `scene`: the serialised [Scene]
      */
-    data class LoadScene(val scene: ExcalidrawScene) : BridgeMessage() {
+    data class LoadScene(val scene: Scene) : BridgeMessage() {
         fun toJson(): String {
             val payload = mapOf(
                 "type" to "loadScene",
@@ -41,10 +41,10 @@ sealed class BridgeMessage {
      * JS→Kotlin: scene-change event posted by the Excalidraw web app whenever
      * the user edits the drawing (draw, move, delete, undo, redo).
      *
-     * The [payload] holds the full scene state (elements + appState) as parsed
-     * by [SceneChangeMessage.fromJson].
+     * The [payload] holds the scene state (elements + appState) as parsed
+     * by [Scene.fromBridgeJson].
      */
-    data class SceneChange(val payload: SceneChangeMessage) : BridgeMessage()
+    data class SceneChange(val payload: Scene) : BridgeMessage()
 
     /**
      * JS→Kotlin: export result posted by the Excalidraw web app after an export
@@ -103,8 +103,8 @@ sealed class BridgeMessage {
                 if (!typeElement.isJsonPrimitive) return null
                 when (typeElement.asString) {
                     "sceneChange" -> {
-                        val sceneChangeMessage = SceneChangeMessage.fromJson(json) ?: return null
-                        SceneChange(sceneChangeMessage)
+                        val scene = Scene.fromBridgeJson(json) ?: return null
+                        SceneChange(scene)
                     }
                     "exportResult" -> {
                         val exportResult = ExportMessage.ExportResult.fromJson(json) ?: return null

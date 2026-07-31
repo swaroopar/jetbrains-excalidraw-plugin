@@ -1,7 +1,9 @@
 package com.swaroop.excalidraw.plugin.bridge
 
+import com.google.gson.JsonArray
+import com.google.gson.JsonObject
 import com.google.gson.JsonParser
-import com.swaroop.excalidraw.plugin.persistence.ExcalidrawScene
+import com.swaroop.excalidraw.plugin.persistence.Scene
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -22,12 +24,14 @@ import org.junit.jupiter.api.Test
  */
 class ExcalidrawJsBridgeTest {
 
-    private fun fixtureScene(): ExcalidrawScene = ExcalidrawScene(
+    private fun fixtureScene(): Scene = Scene(
         type = "excalidraw",
         version = 2,
         source = "https://excalidraw.com",
-        elements = listOf(mapOf("id" to "elem-1", "type" to "rectangle")),
-        appState = mapOf("viewBackgroundColor" to "#ffffff"),
+        elements = JsonArray().apply {
+            add(JsonObject().apply { addProperty("id", "elem-1"); addProperty("type", "rectangle") })
+        },
+        appState = JsonObject().apply { addProperty("viewBackgroundColor", "#ffffff") },
         files = null
     )
 
@@ -125,16 +129,16 @@ class ExcalidrawJsBridgeTest {
 
     /**
      * simulateSceneChange with a valid sceneChange JSON must invoke the injected
-     * sceneChangeHandler exactly once with the correct SceneChangeMessage.
+     * sceneChangeHandler exactly once with the correct Scene.
      */
     @Test
     fun `simulateSceneChange with valid JSON calls sceneChangeHandler exactly once`() {
         var callCount = 0
-        var receivedScene: SceneChangeMessage? = null
+        var receivedScene: Scene? = null
 
         val bridge = ExcalidrawJsBridge.createForTest(
             injector = { _: String -> },
-            sceneChangeHandler = { scene: SceneChangeMessage ->
+            sceneChangeHandler = { scene: Scene ->
                 callCount++
                 receivedScene = scene
             }
@@ -157,7 +161,7 @@ class ExcalidrawJsBridgeTest {
         var callCount = 0
         val bridge = ExcalidrawJsBridge.createForTest(
             injector = { _: String -> },
-            sceneChangeHandler = { _: SceneChangeMessage -> callCount++ }
+            sceneChangeHandler = { _: Scene -> callCount++ }
         )
 
         bridge.simulateSceneChange("not-valid-json{{{")
@@ -173,7 +177,7 @@ class ExcalidrawJsBridgeTest {
         var callCount = 0
         val bridge = ExcalidrawJsBridge.createForTest(
             injector = { _: String -> },
-            sceneChangeHandler = { _: SceneChangeMessage -> callCount++ }
+            sceneChangeHandler = { _: Scene -> callCount++ }
         )
 
         bridge.dispose()
