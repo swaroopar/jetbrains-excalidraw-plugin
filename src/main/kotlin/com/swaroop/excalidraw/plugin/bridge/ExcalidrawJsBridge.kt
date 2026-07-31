@@ -46,7 +46,7 @@ class ExcalidrawJsBridge private constructor(
     private val injector: (String) -> Unit,
     private val readyHandler: (String) -> Unit,
     private val jsQueryDispose: (() -> Unit)?,
-    private val sceneChangeHandler: (Scene) -> Unit = {},
+    sceneChangeHandler: (Scene) -> Unit = {},
     /**
      * Produces the JS expression that sends a payload string to the Kotlin
      * [JBCefJSQuery] handler.  In production this is [JBCefJSQuery.inject];
@@ -76,6 +76,13 @@ class ExcalidrawJsBridge private constructor(
 
     @Volatile
     private var disposed: Boolean = false
+
+    /**
+     * Backs [sceneChangeHandler] as a mutable slot so [registerSceneChangeHandler] can
+     * overwrite the constructor default after construction — see that method for why.
+     */
+    @Volatile
+    private var sceneChangeHandler: (Scene) -> Unit = sceneChangeHandler
 
     /**
      * One-shot callback slot for export results (JS→Kotlin, task-06-004). Set by
@@ -203,6 +210,22 @@ class ExcalidrawJsBridge private constructor(
     fun registerLibraryChangeCallback(cb: (String) -> Unit) {
         if (disposed) return
         libraryChangeCallback = cb
+    }
+
+    /**
+     * Overwrites the scene-change handler after construction.
+     *
+     * [com.swaroop.excalidraw.plugin.editor.ExcalidrawFileEditor]'s single wiring seam
+     * ([ExcalidrawFileEditor.assemble]) calls this once, right after building the editor
+     * instance from this bridge, to route [BridgeMessage.SceneChange] events to
+     * [ExcalidrawFileEditor.onSceneChanged] — without it, constructing the bridge (which
+     * needs the handler) and the editor (which needs the bridge) would be circular, forcing
+     * every caller to hand-roll a forward-reference workaround. After [dispose] this is a
+     * no-op.
+     */
+    fun registerSceneChangeHandler(handler: (Scene) -> Unit) {
+        if (disposed) return
+        sceneChangeHandler = handler
     }
 
     /**

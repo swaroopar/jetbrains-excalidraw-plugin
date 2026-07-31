@@ -71,14 +71,7 @@ class AutosaveDebounceTest {
         val fakePersistence = FakePersistenceService()
         val scheduler = ManualScheduler()
 
-        var editorHolder: ExcalidrawFileEditor? = null
-
-        val bridge = ExcalidrawJsBridge.createForTest(
-            injector = { _ -> },
-            sceneChangeHandler = { scene: Scene ->
-                editorHolder?.onSceneChanged(scene)
-            }
-        )
+        val bridge = ExcalidrawJsBridge.createForTest(injector = { _ -> })
 
         // Blank content: readSceneOrNew opens it as a fresh blank canvas (Scene.empty()),
         // so fireLoadEnd() below succeeds and arms the autosave controller (see AC-E4-01/AD-04).
@@ -94,7 +87,6 @@ class AutosaveDebounceTest {
             scheduler = scheduler
         )
 
-        editorHolder = editor
         // Real open path: arms the autosave controller (awaitEcho — plain JSON has no
         // separate load round-trip to consult) before any scene-change event can arrive.
         host.fireLoadEnd()
