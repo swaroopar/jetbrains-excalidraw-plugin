@@ -8,7 +8,6 @@ import com.intellij.notification.Notification
 import com.intellij.notification.NotificationType
 import com.intellij.notification.Notifications
 import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.fileEditor.FileEditor
 import com.intellij.openapi.fileEditor.FileEditorState
@@ -26,7 +25,11 @@ import com.swaroop.excalidraw.plugin.jcef.LibraryBrowserDialog
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawLibraryService
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawParseException
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawPersistenceService
-import com.swaroop.excalidraw.plugin.persistence.ExcalidrawSerializer
+import com.swaroop.excalidraw.plugin.persistence.document.JsonSceneDocument
+import com.swaroop.excalidraw.plugin.persistence.document.PngSceneDocument
+import com.swaroop.excalidraw.plugin.persistence.document.SceneDocument
+import com.swaroop.excalidraw.plugin.persistence.document.SceneLoadResult
+import com.swaroop.excalidraw.plugin.persistence.document.SceneSaveResult
 import com.swaroop.excalidraw.plugin.theme.ExcalidrawThemeController
 import java.beans.PropertyChangeListener
 import java.beans.PropertyChangeSupport
@@ -88,6 +91,13 @@ class ExcalidrawFileEditor private constructor(
      */
     internal val bridge: ExcalidrawJsBridge,
     private val persistenceService: ExcalidrawPersistenceService,
+    /**
+     * Owns load/save for this file's on-disk scene format (plain JSON vs
+     * scene-embedded PNG) — see [SceneDocument]. Chosen once, in the factory
+     * methods below, based on [isExcalidrawPng]; the editor never branches on
+     * file format again after that.
+     */
+    private val document: SceneDocument,
     private val notifier: (String) -> Unit,
     /**
      * Optional test-mode override for the debounce scheduling mechanism.
@@ -154,14 +164,6 @@ class ExcalidrawFileEditor private constructor(
          * the scene to the VFS via [ExcalidrawPersistenceService.writeScene].
          */
         const val AUTOSAVE_DEBOUNCE_MS: Long = 500L
-
-        /**
-         * Canonical empty Excalidraw scene used as [currentSceneJson] when a `.excalidraw.png`
-         * is opened with no embedded scene (it becomes a fresh, savable blank drawing). Mirrors
-         * the empty canvas the JS side renders in that case, so the seeded baseline matches.
-         */
-        private const val EMPTY_SCENE_JSON: String =
-            """{"type":"excalidraw","version":2,"elements":[],"appState":{},"files":{}}"""
 
         /**
          * Returns true when [name] identifies a scene-embedded PNG file.
@@ -262,12 +264,20 @@ class ExcalidrawFileEditor private constructor(
             // loadEnd-timed pushCurrentTheme call — task-05-007 timing contract).
             val themeController = ExcalidrawThemeController(bridge)
 
+            val persistenceService = ExcalidrawPersistenceService()
+            val document: SceneDocument = if (isExcalidrawPng(file.name)) {
+                PngSceneDocument(persistenceService)
+            } else {
+                JsonSceneDocument(persistenceService)
+            }
+
             return ExcalidrawFileEditor(
                 project = project,
                 file = file,
                 jcefHost = host,
                 bridge = bridge,
-                persistenceService = ExcalidrawPersistenceService(),
+                persistenceService = persistenceService,
+                document = document,
                 notifier = notifier,
                 debounceExecutor = null,
                 themeController = themeController
@@ -327,12 +337,18 @@ class ExcalidrawFileEditor private constructor(
             debounceExecutor: (() -> Unit)? = null,
             themeController: ExcalidrawThemeController? = null
         ): ExcalidrawFileEditor {
+            val document: SceneDocument = if (isExcalidrawPng(file.name)) {
+                PngSceneDocument(persistenceService)
+            } else {
+                JsonSceneDocument(persistenceService)
+            }
             return ExcalidrawFileEditor(
                 project = null,
                 file = file,
                 jcefHost = jcefHost,
                 bridge = bridge,
                 persistenceService = persistenceService,
+                document = document,
                 notifier = notifier,
                 debounceExecutor = debounceExecutor,
                 themeController = themeController
@@ -352,12 +368,6 @@ class ExcalidrawFileEditor private constructor(
     // -------------------------------------------------------------------------
     // Auto-save debounce (task-04-004, AC-E3-01/E3-03)
     // -------------------------------------------------------------------------
-
-    /**
-     * Canonical serializer for `.excalidraw` JSON output.
-     * Normalizes the raw [currentSceneJson] before writing to VFS.
-     */
-    private val serializer: ExcalidrawSerializer = ExcalidrawSerializer()
 
     /**
      * Alarm bound to this editor's [Disposable] lifetime.
@@ -435,28 +445,21 @@ class ExcalidrawFileEditor private constructor(
     private var baselineElements: String? = null
 
     /**
-     * Whether autosave is permitted to overwrite this `.excalidraw.png` file.
+     * Whether [document] has produced a definitive load outcome for this file yet.
      *
-     * `.excalidraw.png` files are persisted by re-rasterising the editor canvas and
-     * replacing the file's bytes. Before this flag is set the canvas content has not
-     * been reconciled with the file (the extraction round-trip is still in flight, and
-     * an early `onChange` may carry stale/empty mount state), so a write then could
-     * silently destroy the user's image. While it is false, [onSceneChanged] drops
-     * events and [scheduleAutosave] refuses to write.
+     * Some formats' load protocol round-trips through the bridge asynchronously (PNG
+     * extraction); before that round-trip settles, the canvas may hold stale/unrelated
+     * state (e.g. an early `onChange` fired during page mount), so a real edit can't yet
+     * be told apart from that noise. While this is false, [onSceneChanged] drops events
+     * entirely — no baseline update, no autosave. It is set to true exactly when
+     * [wireLoadEndCallback]'s `document.load` callback fires with a non-[SceneLoadResult.Failed]
+     * result (for a synchronous format like plain JSON, that happens before any `onChange`
+     * could possibly arrive, so this flag never actually gates that format in practice).
      *
-     * It is set to true once the open path has settled the canvas against the file, in
-     * BOTH branches of the PNG callback in [wireLoadEndCallback]:
-     *  - extraction success: baseline seeded from the extracted scene; edits round-trip;
-     *  - extraction failure (no embedded scene): the canvas is a blank drawing and the
-     *    baseline is empty, so opening writes nothing but the user's first edit saves
-     *    (creating a proper `.excalidraw.png` with an embedded scene).
-     *
-     * Irrelevant for plain `.excalidraw` (JSON) files, which round-trip losslessly and
-     * are never gated by this flag. Written exclusively on the EDT (AD-05); volatile for
-     * cross-thread visibility.
+     * Written exclusively on the EDT (AD-05); volatile for cross-thread visibility.
      */
     @Volatile
-    private var pngSceneExtracted: Boolean = false
+    private var sceneReady: Boolean = false
 
     /**
      * The most-recently received scene state, serialised as a JSON string via
@@ -493,27 +496,19 @@ class ExcalidrawFileEditor private constructor(
      * Registers the scene-push callback on [jcefHost].
      *
      * The callback is invoked on the EDT (AD-05) exactly once after JCEF fires
-     * onLoadEnd (AD-04). Inside the callback two paths are taken:
-     *
-     * **PNG path** (`.excalidraw.png` files, task-07-007, AC-E6-01/E6-03):
-     * 1. File bytes are read via [ReadAction] (if an Application is available) or
-     *    directly (test mode) — no [ExcalidrawPersistenceService.readScene] call.
-     * 2. Bytes are Base64-encoded to produce a `data:image/png;base64,...` Data URL.
-     * 3. [ExcalidrawJsBridge.installReturnChannel] installs the JS→Kotlin channel.
-     * 4. [ExcalidrawJsBridge.registerPngExtractedCallback] stores a one-shot callback:
-     *    - On success ([BridgeMessage.PngExtracted.error] is null): [currentSceneJson] is set
-     *      to the extracted scene (the canvas already shows the scene via `__excalidrawLoadPng__`).
-     *    - On failure ([BridgeMessage.PngExtracted.error] is non-null): [notifier] is called
-     *      with the error message; [currentSceneJson] is not changed (AC-E6-03).
-     * 5. [ExcalidrawJsBridge.requestPngExtract] injects the JS call.
-     * 6. [ExcalidrawThemeController.pushCurrentTheme] is called if present.
-     *
-     * **JSON path** (plain `.excalidraw` files — unchanged from prior tasks):
-     * 1. [ExcalidrawPersistenceService.readScene] reads and parses the file.
-     * 2. On success, [ExcalidrawJsBridge.installReturnChannel] installs the JS→Kotlin channel.
-     * 3. [ExcalidrawJsBridge.loadScene] pushes the scene to the web app.
-     * 4. [ExcalidrawThemeController.pushCurrentTheme] is called (AC-E4-01, task-05-007).
-     * 5. On [ExcalidrawParseException], [notifier] is called (AD-03); no VirtualFile write.
+     * onLoadEnd (AD-04). It delegates the format-specific work (plain JSON vs
+     * scene-embedded PNG) entirely to [document] (see [SceneDocument]) and only
+     * interprets the sealed [SceneLoadResult] it reports back:
+     *  - [SceneLoadResult.LoadedAndBaselined]: seeds [currentSceneJson] and
+     *    [baselineElements] immediately (the format's own round-trip already
+     *    reconciled the canvas against the file).
+     *  - [SceneLoadResult.LoadedAwaitingEcho]: nothing to seed yet — the canvas's
+     *    own first `onChange` establishes the baseline (see [onSceneChanged]).
+     *  - [SceneLoadResult.Failed]: [notifier] is called (AD-03); no VirtualFile write.
+     * Either way, [sceneReady] is set once the outcome is known, so [onSceneChanged]
+     * knows whether the canvas can be trusted yet. [ExcalidrawThemeController.pushCurrentTheme]
+     * and [restorePersistedLibrary] run right after triggering the load, skipped only on
+     * a (synchronous) load failure.
      *
      * In test mode (no [ApplicationManager] available), the callback executes
      * synchronously on the caller's thread to keep test assertions deterministic.
@@ -526,110 +521,44 @@ class ExcalidrawFileEditor private constructor(
             val application = ApplicationManager.getApplication()
 
             val work: () -> Unit = {
-                if (isExcalidrawPng(file.name)) {
-                    // PNG async path (task-07-007, AC-E6-01/AC-E6-03):
-                    // Read bytes using ReadAction when an Application context is available
-                    // (EDT-safe, no blocking reads inside a write lock). Fall back to
-                    // direct call in test mode where no Application exists.
-                    val bytes: ByteArray = if (application != null) {
-                        ReadAction.compute<ByteArray, Throwable> { file.contentsToByteArray() }
-                    } else {
-                        file.contentsToByteArray()
-                    }
-                    // A03: Base64 encoding of raw bytes — no string concatenation of
-                    // untrusted data; java.util.Base64 is the standard JVM encoder.
-                    val base64 = java.util.Base64.getEncoder().encodeToString(bytes)
-                    val dataUrl = "data:image/png;base64,$base64"
-
-                    // Install the JS→Kotlin return channel BEFORE registering the callback
-                    // and requesting PNG extraction, so __excalidrawPostToKotlin__ is
-                    // available when the JS side responds.
-                    bridge.installReturnChannel()
-                    // Route the async Clipboard API through the JVM system clipboard —
-                    // JCEF auto-denies clipboard-read, so without this Excalidraw copy/paste
-                    // fails ("couldn't read from system clipboard").
-                    bridge.installClipboardBridge()
-
-                    bridge.registerPngExtractedCallback { msg ->
-                        // Callback arrives on the JCEF/bridge thread — route to EDT.
-                        val deliver: () -> Unit = {
-                            if (msg.error != null) {
-                                // The PNG carries no embedded Excalidraw scene (a plain raster),
-                                // or it could not be decoded as one. Open it as a blank, editable
-                                // canvas: arm autosave with an EMPTY baseline so the user can draw
-                                // and the first edit is persisted — that save writes a proper
-                                // .excalidraw.png with an embedded scene, after which every later
-                                // edit round-trips. The empty baseline (matched by the JS side,
-                                // which clears the canvas to empty here) guarantees that merely
-                                // opening the file never rewrites it — only a real edit does.
-                                LOG.info(
-                                    "ExcalidrawFileEditor: '${file.path}' has no embedded scene " +
-                                        "(${msg.error}) — opening as a new blank drawing"
-                                )
-                                currentSceneJson = EMPTY_SCENE_JSON
-                                baselineElements = canonicalElements(JsonArray())
-                                pngSceneExtracted = true
-                            } else {
-                                // AC-E6-01: scene extracted successfully. The canvas already
-                                // shows the scene (driven by __excalidrawLoadPng__ on the JS
-                                // side). Record the scene JSON for future auto-save use.
-                                currentSceneJson = msg.sceneJson
-                                // Seed the change-detection baseline from the extracted scene
-                                // so the post-extraction onChange echo is not mistaken for a
-                                // user edit (which would otherwise schedule a spurious rewrite).
-                                baselineElements = canonicalElements(elementsOf(msg.sceneJson))
-                                // Arm autosave: the canvas content now provably originates from
-                                // a successful load of THIS file, so persisting it is safe.
-                                pngSceneExtracted = true
-                            }
+                // AD-04/AD-05: [document] owns the format-specific load protocol (plain
+                // JSON vs scene-embedded PNG, see SceneDocument); this call may complete
+                // synchronously (JSON) or after a bridge round-trip (PNG extraction).
+                var failed = false
+                document.load(file, bridge) { result ->
+                    when (result) {
+                        is SceneLoadResult.LoadedAndBaselined -> {
+                            currentSceneJson = result.sceneJson
+                            baselineElements = canonicalElements(elementsOf(result.sceneJson))
+                            sceneReady = true
                         }
-                        // Re-route to EDT if a real Application is present; otherwise
-                        // execute synchronously (test-mode determinism).
-                        if (application != null) {
-                            application.invokeLater(deliver)
-                        } else {
-                            deliver()
+                        SceneLoadResult.LoadedAwaitingEcho -> {
+                            // The canvas will fire its own render/onChange echo once mounted;
+                            // that first onSceneChanged call establishes the baseline instead
+                            // (see the `baseline == null` branch there).
+                            sceneReady = true
+                        }
+                        is SceneLoadResult.Failed -> {
+                            // AD-03: invoke the notifier hook, do NOT write VirtualFile.
+                            // A09: only the human-readable message is surfaced — no stack trace.
+                            LOG.warn("ExcalidrawFileEditor: load error for '${file.path}': ${result.message}")
+                            notifier(result.message)
+                            failed = true
                         }
                     }
-
-                    // Inject the JS call that triggers extraction on the web app side.
-                    // A03: dataUrl is passed through Gson.toJson in requestPngExtract —
-                    // no raw string concatenation of file data into JS code.
-                    bridge.requestPngExtract(dataUrl)
-
-                    // AC-E4-01 timing: push initial theme after the JS call so that
-                    // __excalidrawSetTheme__ is guaranteed to be defined at this point.
+                }
+                // AC-E4-01 timing: push the initial theme (and restore the library) right
+                // after triggering the load — for a synchronous format this runs after the
+                // callback above already fired; for an async format (PNG) it runs before the
+                // round-trip completes, matching __excalidrawSetTheme__'s availability once
+                // the page has rendered either way. Skipped entirely on a (synchronous) load
+                // failure, since nothing was pushed to the canvas to theme.
+                if (!failed) {
                     themeController?.pushCurrentTheme()
                     restorePersistedLibrary()
-                } else {
-                    // JSON path (plain .excalidraw files). readSceneOrNew opens an empty
-                    // or newly-created file as a blank canvas instead of erroring.
-                    try {
-                        val scene = persistenceService.readSceneOrNew(file)
-                        // Install the JS→Kotlin return channel BEFORE loading the scene
-                        // so that window.__excalidrawPostToKotlin__ is available as soon
-                        // as Excalidraw's onChange fires (AD-04, task-03-005).
-                        bridge.installReturnChannel()
-                        // Route the async Clipboard API through the JVM system clipboard —
-                        // JCEF auto-denies clipboard-read, so without this Excalidraw copy/paste
-                        // fails ("couldn't read from system clipboard").
-                        bridge.installClipboardBridge()
-                        bridge.loadScene(scene)
-                        // AC-E4-01 timing: push initial theme AFTER loadScene so that
-                        // window.__excalidrawSetTheme__ (registered in index.jsx after
-                        // render) is guaranteed to exist before the call (task-05-007).
-                        themeController?.pushCurrentTheme()
-                        restorePersistedLibrary()
-                    } catch (ex: ExcalidrawParseException) {
-                        // AD-03: invoke the notifier hook, do NOT write VirtualFile.
-                        // A09: only the human-readable message is surfaced — no stack trace in UI.
-                        val message = ex.message ?: "Cannot parse Excalidraw file '${ex.filePath}'"
-                        LOG.warn("ExcalidrawFileEditor: parse error for '${ex.filePath}'", ex)
-                        notifier(message)
-                    }
-                    // Any other (unexpected) exception propagates to the EDT exception handler
-                    // and surfaces as an IDE error dialog — intentional (A09: don't swallow unknowns).
                 }
+                // Any other (unexpected) exception propagates to the EDT exception handler
+                // and surfaces as an IDE error dialog — intentional (A09: don't swallow unknowns).
             }
 
             if (application != null) {
@@ -716,14 +645,20 @@ class ExcalidrawFileEditor private constructor(
      */
     fun onSceneChanged(scene: SceneChangeMessage) {
         val work: () -> Unit = {
-            if (isExcalidrawPng(file.name) && !pngSceneExtracted) {
-                // The scene was never successfully extracted from this .excalidraw.png
-                // (e.g. the file carries no embedded Excalidraw scene). The canvas holds
-                // stale/empty state unrelated to the file, so the event is dropped
-                // entirely: autosave must never overwrite the user's image with content
-                // that did not come from the file. currentSceneJson is deliberately left
-                // untouched so no later export can pick up this state.
-                LOG.debug("onSceneChanged ignored: no scene extracted yet for PNG '${file.path}'")
+            // Only formats whose load protocol round-trips asynchronously (PNG extraction)
+            // need this gate: plain JSON's load either fully completes before any onChange
+            // could arrive, or never ran at all (e.g. some tests drive onSceneChanged
+            // directly) — in both cases the first onChange safely establishes the baseline
+            // below. Deliberately still format-specific: fully retiring this fork is #109's
+            // job (lift dirty-tracking into a format-agnostic AutosaveController).
+            if (isExcalidrawPng(file.name) && !sceneReady) {
+                // The document's load protocol hasn't produced a definitive outcome yet
+                // (the PNG extraction round-trip is still in flight). The canvas may
+                // hold stale/unrelated state, so the event is dropped entirely: autosave
+                // must never overwrite the file with content that did not come from it.
+                // currentSceneJson is deliberately left untouched so no later export can
+                // pick up this state.
+                LOG.debug("onSceneChanged ignored: document not yet ready for '${file.path}'")
             } else {
                 currentSceneJson = GSON.toJson(scene)
                 val newCanonical = canonicalElements(scene.elements)
@@ -814,87 +749,39 @@ class ExcalidrawFileEditor private constructor(
      * (replacing any previously scheduled work) without real timer involvement.
      * Tests call [flushDebounce] to execute the stored work synchronously.
      *
-     * Two paths depending on the file extension:
-     *
-     * **PNG path** (`.excalidraw.png`, task-07-008, AC-E6-02):
-     * 1. Registers a one-shot [bridge.registerPngExportedCallback] callback that:
-     *    - On success ([BridgeMessage.PngExported.error] is null): decodes the Base64 PNG,
-     *      calls [ExcalidrawPersistenceService.writePngScene], clears [_modified].
-     *    - On failure ([BridgeMessage.PngExported.error] is non-null): logs a warning;
-     *      does NOT write the file (AC-E6-02: no write on error).
-     * 2. Calls [bridge.requestPngExport] with [currentSceneJson] to trigger the JS round-trip.
-     * 3. [_modified] is cleared only in the callback (after the async write completes).
-     *
-     * **JSON path** (plain `.excalidraw`, unchanged from prior tasks):
-     * 1. Reads [currentSceneJson] (snapshot at the time of scheduling).
-     * 2. Normalises it via [ExcalidrawSerializer.serialize].
-     * 3. Persists via [ExcalidrawPersistenceService.writeScene].
-     * 4. Resets [_modified] to false and fires PROP_MODIFIED (true → false) event (AC-E3-03).
+     * [document] owns the format-specific write (synchronous for plain JSON, async via a
+     * bridge round-trip for PNG re-export — see [SceneDocument]); this method only
+     * interprets the sealed [SceneSaveResult] it reports back:
+     *  - [SceneSaveResult.Saved]: clears [_modified], fires PROP_MODIFIED (true → false).
+     *  - [SceneSaveResult.Failed]: logs a warning; does NOT touch [_modified] (no write
+     *    occurred).
+     *  - [SceneSaveResult.Skipped]: no-op (e.g. a PNG save requested before its load
+     *    round-trip armed itself) — not logged, this is an expected, silent skip.
      */
     private fun scheduleAutosave() {
         val autosaveWork = Runnable {
             if (isDisposed) return@Runnable
+            val json = currentSceneJson ?: return@Runnable
 
-            if (isExcalidrawPng(file.name)) {
-                // Defense-in-depth: never re-export over a .excalidraw.png whose scene
-                // was not successfully extracted from the file itself. [onSceneChanged]
-                // already refuses to schedule autosave in that case, but guard here too
-                // so no future caller can route an unextracted PNG into a destructive write.
-                if (!pngSceneExtracted) return@Runnable
-                // PNG async path (task-07-008, AC-E6-02):
-                // The JS side will re-export the scene as a PNG and post the base64 result
-                // back via the bridge.  We must capture currentSceneJson NOW (at schedule
-                // time) to pass to requestPngExport — the snapshot is safe from TOCTOU.
-                val json = currentSceneJson ?: return@Runnable
-
-                val application = ApplicationManager.getApplication()
-
-                bridge.registerPngExportedCallback { msg ->
-                    // Callback arrives on the JCEF/bridge thread — route to EDT (AD-05).
-                    val deliver: () -> Unit = deliver@{
-                        if (isDisposed) return@deliver
-                        if (msg.error != null) {
-                            // AC-E6-02: no write on error; log at WARN level (A09).
-                            // Do NOT call writePngScene; _modified stays true.
-                            LOG.warn(
-                                "ExcalidrawFileEditor: PNG export error for " +
-                                    "'${file.path}': ${msg.error}"
-                            )
-                        } else if (msg.base64Png != null) {
-                            // AC-E6-02: write the re-embedded PNG via VFS setBinaryContent.
-                            persistenceService.writePngScene(file, msg.base64Png)
-                            val wasModified = _modified
-                            _modified = false
-                            if (wasModified) {
-                                propertyChangeSupport.firePropertyChange(
-                                    FileEditor.getPropModified(), true, false
-                                )
-                            }
+            // A03: sceneJson only ever flows through Gson-mediated (de)serialisation on
+            // its way to/from the bridge and VFS — no raw string concatenation.
+            document.save(file, json, bridge) { result ->
+                if (isDisposed) return@save
+                when (result) {
+                    SceneSaveResult.Saved -> {
+                        val wasModified = _modified
+                        _modified = false
+                        if (wasModified) {
+                            propertyChangeSupport.firePropertyChange(FileEditor.getPropModified(), true, false)
                         }
-                        // base64Png == null AND error == null: unexpected — no write,
-                        // but also no crash (defensive; not expected in normal operation).
                     }
-                    // Re-route to EDT if a real Application is present; otherwise
-                    // execute synchronously (test-mode determinism).
-                    if (application != null) {
-                        application.invokeLater(deliver)
-                    } else {
-                        deliver()
+                    is SceneSaveResult.Failed -> {
+                        // No write on error (A09): log at WARN level; _modified stays true.
+                        LOG.warn("ExcalidrawFileEditor: save error for '${file.path}': ${result.message}")
                     }
-                }
-
-                // A03: sceneJson is passed through Gson.toJson inside requestPngExport —
-                // no raw string concatenation of file data into JS code.
-                bridge.requestPngExport(json)
-            } else {
-                // JSON path (plain .excalidraw — unchanged from prior tasks):
-                val json = currentSceneJson ?: return@Runnable
-                val normalized = serializer.serialize(json)
-                persistenceService.writeScene(file, normalized)
-                val wasModified = _modified
-                _modified = false
-                if (wasModified) {
-                    propertyChangeSupport.firePropertyChange(FileEditor.getPropModified(), true, false)
+                    SceneSaveResult.Skipped -> {
+                        // Expected, silent no-op — not an error.
+                    }
                 }
             }
         }
