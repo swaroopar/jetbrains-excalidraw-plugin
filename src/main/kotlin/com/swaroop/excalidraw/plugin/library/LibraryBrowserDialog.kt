@@ -1,4 +1,4 @@
-package com.swaroop.excalidraw.plugin.jcef
+package com.swaroop.excalidraw.plugin.library
 
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.logger
@@ -11,8 +11,6 @@ import org.cef.handler.CefDisplayHandlerAdapter
 import org.cef.handler.CefLifeSpanHandlerAdapter
 import org.cef.handler.CefRequestHandlerAdapter
 import org.cef.network.CefRequest
-import java.net.URLDecoder
-import java.nio.charset.StandardCharsets
 import javax.swing.JComponent
 
 /**
@@ -27,6 +25,8 @@ import javax.swing.JComponent
  * Note: the editor webview's origin is opaque ("null"), so Excalidraw can't set a usable
  * `libraryReturnUrl` — the site would redirect to a dead `/null/...` page. We don't rely on
  * the referrer at all; we just watch for the `addLibrary=` parameter on any navigation.
+ *
+ * Internal implementation detail of [LibraryImport] — construct via [LibraryImport.start].
  */
 internal class LibraryBrowserDialog(
     project: Project,
@@ -113,7 +113,7 @@ internal class LibraryBrowserDialog(
     private fun completeWith(url: String) {
         if (handled) return
         LOG.info("Excalidraw: library return intercepted: $url")
-        val libUrl = extractAddLibraryUrl(url)
+        val libUrl = LibraryImport.extractAddLibraryUrl(url)
         handled = true
         ApplicationManager.getApplication().invokeLater {
             if (libUrl != null) {
@@ -132,24 +132,5 @@ internal class LibraryBrowserDialog(
 
     companion object {
         private val LOG = logger<LibraryBrowserDialog>()
-
-        /**
-         * Extracts the `.excalidrawlib` URL from a navigation that carries
-         * `addLibrary=<encoded-url>` in either the query or the fragment. Returns the
-         * decoded http(s) URL, or null if absent / not http(s). Pure + unit-testable.
-         */
-        fun extractAddLibraryUrl(url: String): String? {
-            val idx = url.indexOf("addLibrary=")
-            if (idx < 0) return null
-            val rest = url.substring(idx + "addLibrary=".length)
-            val raw = rest.substringBefore('&')
-            if (raw.isEmpty()) return null
-            val decoded = try {
-                URLDecoder.decode(raw, StandardCharsets.UTF_8)
-            } catch (_: Exception) {
-                return null
-            }
-            return if (decoded.startsWith("http://") || decoded.startsWith("https://")) decoded else null
-        }
     }
 }
