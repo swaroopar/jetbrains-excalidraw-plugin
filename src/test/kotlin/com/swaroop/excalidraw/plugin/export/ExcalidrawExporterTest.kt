@@ -221,32 +221,18 @@ class ExcalidrawExporterTest {
     // -------------------------------------------------------------------------
 
     /**
-     * AC-task-06-008: ExportSvgAction.isEnabledForEditor(editor) must return false
+     * AC-task-06-008: isEnabledForExcalidrawEditor(editor) must return false
      * when the supplied editor is NOT an ExcalidrawFileEditor.
      *
-     * This test exercises the pure logic helper exposed on each action class so
+     * This test exercises the pure logic helper shared by both actions so
      * no JCEF / ApplicationManager / FileEditorManager is needed.
      */
     @Test
-    fun `ExportSvgAction isEnabledForEditor returns false for non-ExcalidrawFileEditor`() {
-        val action = ExportSvgAction()
+    fun `isEnabledForExcalidrawEditor returns false for non-ExcalidrawFileEditor`() {
         // null editor simulates "no active editor" (FileEditorManager.selectedEditor == null)
         assertFalse(
-            action.isEnabledForEditor(null),
-            "ExportSvgAction must be disabled when selectedEditor is null"
-        )
-    }
-
-    /**
-     * AC-task-06-008: ExportPngAction.isEnabledForEditor(editor) must return false
-     * when the supplied editor is NOT an ExcalidrawFileEditor.
-     */
-    @Test
-    fun `ExportPngAction isEnabledForEditor returns false for non-ExcalidrawFileEditor`() {
-        val action = ExportPngAction()
-        assertFalse(
-            action.isEnabledForEditor(null),
-            "ExportPngAction must be disabled when selectedEditor is null"
+            isEnabledForExcalidrawEditor(null),
+            "must be disabled when selectedEditor is null"
         )
     }
 

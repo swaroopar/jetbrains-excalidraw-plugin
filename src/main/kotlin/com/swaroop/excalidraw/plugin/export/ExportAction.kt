@@ -110,22 +110,12 @@ internal fun performExportAction(
  * Registered in `plugin.xml` under id `Excalidraw.ExportSvg` in the
  * `EditorPopupMenu` group.
  *
- * update(): disabled when no [ExcalidrawFileEditor] is active (see [isEnabledForEditor]).
+ * update(): disabled when no [ExcalidrawFileEditor] is active (see [isEnabledForExcalidrawEditor]).
  * actionPerformed(): opens a save dialog, then delegates to [ExcalidrawExporter].
  */
 class ExportSvgAction : AnAction() {
 
     private val log: Logger = Logger.getInstance(ExportSvgAction::class.java)
-
-    /**
-     * Pure logic helper — returns true iff [editor] is an [ExcalidrawFileEditor].
-     *
-     * Exposed for unit tests in [ExcalidrawExporterTest] so the enabled/disabled
-     * rule is verifiable without an [AnActionEvent] or IDE runtime.
-     * Delegates to [isEnabledForExcalidrawEditor] — no Reflection.
-     */
-    internal fun isEnabledForEditor(editor: FileEditor?): Boolean =
-        isEnabledForExcalidrawEditor(editor)
 
     override fun update(event: AnActionEvent) = updateExportAction(event)
 
@@ -139,22 +129,12 @@ class ExportSvgAction : AnAction() {
  * Registered in `plugin.xml` under id `Excalidraw.ExportPng` in the
  * `EditorPopupMenu` group.
  *
- * update(): disabled when no [ExcalidrawFileEditor] is active (see [isEnabledForEditor]).
+ * update(): disabled when no [ExcalidrawFileEditor] is active (see [isEnabledForExcalidrawEditor]).
  * actionPerformed(): opens a save dialog, then delegates to [ExcalidrawExporter].
  */
 class ExportPngAction : AnAction() {
 
     private val log: Logger = Logger.getInstance(ExportPngAction::class.java)
-
-    /**
-     * Pure logic helper — returns true iff [editor] is an [ExcalidrawFileEditor].
-     *
-     * Exposed for unit tests in [ExcalidrawExporterTest] so the enabled/disabled
-     * rule is verifiable without an [AnActionEvent] or IDE runtime.
-     * Delegates to [isEnabledForExcalidrawEditor] — no Reflection.
-     */
-    internal fun isEnabledForEditor(editor: FileEditor?): Boolean =
-        isEnabledForExcalidrawEditor(editor)
 
     override fun update(event: AnActionEvent) = updateExportAction(event)
 
