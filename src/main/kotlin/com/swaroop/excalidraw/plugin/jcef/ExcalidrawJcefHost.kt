@@ -7,7 +7,6 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.openapi.util.SystemInfo
-import com.intellij.util.concurrency.EdtScheduledExecutorService
 import com.intellij.ui.jcef.JBCefApp
 import com.intellij.ui.jcef.JBCefBrowser
 import com.intellij.ui.jcef.JcefShortcutProvider
@@ -16,13 +15,10 @@ import org.cef.browser.CefBrowser
 import org.cef.browser.CefFrame
 import org.cef.callback.CefSchemeRegistrar
 import org.cef.handler.CefLifeSpanHandlerAdapter
-import org.cef.handler.CefLoadHandler
-import org.cef.handler.CefLoadHandlerAdapter
 import org.cef.network.CefRequest
 import java.awt.Toolkit
 import java.awt.event.InputEvent
 import java.awt.event.KeyEvent
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import javax.swing.JComponent
 import javax.swing.KeyStroke
@@ -54,7 +50,14 @@ import javax.swing.KeyStroke
  *   instance and cannot run as a plain JUnit 5 unit test.
  */
 class ExcalidrawJcefHost private constructor(
-    private val browser: JBCefBrowser?
+    private val browser: JBCefBrowser?,
+    /**
+     * Seam for the load-lifecycle operations (navigate, dispose, react to load end/error,
+     * schedule the retry reload) this host depends on. [invoke] wires a real
+     * [JBCefBrowserHandle]; [createForTest] defaults to a [FakeCefBrowserHandle] so tests
+     * can drive [registerLoadLifecycle] without reflection into this class's private state.
+     */
+    private val browserHandle: CefBrowserHandle
 ) : Disposable {
 
     companion object {
@@ -163,8 +166,8 @@ class ExcalidrawJcefHost private constructor(
             val browser = JBCefBrowser.createBuilder()
                 .setUrl(startUrlWithTheme())
                 .build()
-            val host = ExcalidrawJcefHost(browser)
-            host.registerLoadHandler()
+            val host = ExcalidrawJcefHost(browser, JBCefBrowserHandle(browser))
+            host.registerLoadLifecycle()
             host.registerLifeSpanHandler()
             host.releaseEditShortcutsToCanvas()
             // Diagnostics: launch with -Dexcalidraw.devtools=true (Help > Edit Custom VM
@@ -179,10 +182,17 @@ class ExcalidrawJcefHost private constructor(
         /**
          * Test factory — creates a host without a real [JBCefBrowser].
          * Used only by unit tests that cannot access the JCEF runtime.
+         *
+         * [browserHandle] defaults to a throwaway [FakeCefBrowserHandle]; pass your own
+         * instance to drive this host's load lifecycle from a test — e.g.
+         * `fakeHandle.simulateLoadEnd()` to fire registered [addLoadEndListener] callbacks,
+         * or `fakeHandle.simulateLoadError(...)` to exercise the [shouldRetrySchemeLoad]
+         * retry path — instead of reflection into this class's private state.
+         *
          * A09: not exposed via production API; does not log internal state.
          */
-        fun createForTest(): ExcalidrawJcefHost =
-            ExcalidrawJcefHost(browser = null)
+        fun createForTest(browserHandle: CefBrowserHandle = FakeCefBrowserHandle()): ExcalidrawJcefHost =
+            ExcalidrawJcefHost(browser = null, browserHandle = browserHandle).also { it.registerLoadLifecycle() }
     }
 
     /**
@@ -192,8 +202,8 @@ class ExcalidrawJcefHost private constructor(
     private val loadEndListeners: MutableList<() -> Unit> = mutableListOf()
 
     /**
-     * True once [dispose] or [disposeForTest] has been called.
-     * After disposal, [fireLoadEnd] is a no-op (A05 — stale callbacks suppressed).
+     * True once [dispose] has been called.
+     * After disposal, the load-end firing is a no-op (A05 — stale callbacks suppressed).
      */
     @Volatile
     private var disposed: Boolean = false
@@ -374,58 +384,33 @@ class ExcalidrawJcefHost private constructor(
     }
 
     /**
-     * Registers a [CefLoadHandlerAdapter] on the underlying browser that will call
-     * [fireLoadEnd] when JCEF emits its page-load-complete event.
-     * Only called in production mode — test mode uses direct [fireLoadEnd] invocation.
+     * Wires this host's load-lifecycle reactions onto [browserHandle]: [fireLoadEnd] on
+     * every main-frame load end, and the scheme-not-ready retry (via
+     * [shouldRetrySchemeLoad]/[armForReload]) on a main-frame load error.
+     *
+     * Called by both [invoke] (production, [browserHandle] is a [JBCefBrowserHandle]) and
+     * [createForTest] (test mode, [browserHandle] is a [FakeCefBrowserHandle]) — the same
+     * reaction logic runs either way, driven through [CefBrowserHandle] instead of directly
+     * touching a [org.cef.handler.CefLoadHandlerAdapter] here.
      */
-    private fun registerLoadHandler() {
-        browser?.jbCefClient?.addLoadHandler(
-            object : CefLoadHandlerAdapter() {
-                override fun onLoadEnd(
-                    cefBrowser: CefBrowser?,
-                    frame: CefFrame?,
-                    httpStatusCode: Int
-                ) {
-                    // Only fire for the main frame (frame.isMain guarantees we don't
-                    // react to sub-frame loads such as iframes — A03: no injection via sub-frames).
-                    if (frame?.isMain == true) {
-                        fireLoadEnd()
+    private fun registerLoadLifecycle() {
+        browserHandle.onLoadEnd { fireLoadEnd() }
+        browserHandle.onLoadError { isMainFrame, failedUrl ->
+            if (shouldRetrySchemeLoad(isMainFrame, failedUrl)) {
+                // Retry on the EDT after a short delay; the `disposed` guard makes a
+                // late-firing retry a no-op if the editor is closed meanwhile.
+                browserHandle.scheduleReload(SCHEME_RELOAD_DELAY_MS.toLong()) {
+                    if (!disposed) {
+                        // The failed (ERR_UNKNOWN_URL_SCHEME) load already fired onLoadEnd
+                        // for its error page, tripping the once-only [fired] guard. Reset
+                        // it so this reload's onLoadEnd re-fires the scene-push —
+                        // otherwise the first restored editor on IDE restart renders empty.
+                        armForReload()
+                        browserHandle.loadUrl(startUrlWithTheme())
                     }
                 }
-
-                override fun onLoadError(
-                    cefBrowser: CefBrowser?,
-                    frame: CefFrame?,
-                    errorCode: CefLoadHandler.ErrorCode?,
-                    errorText: String?,
-                    failedUrl: String?
-                ) {
-                    if (errorCode != null) {
-                        LOG.debug("Excalidraw: onLoadError errorCode=$errorCode url=$failedUrl")
-                    }
-                    if (shouldRetrySchemeLoad(frame?.isMain == true, failedUrl)) {
-                        // Retry on the EDT after a short delay; the `disposed` guard makes a
-                        // late-firing retry a no-op if the editor is closed meanwhile.
-                        EdtScheduledExecutorService.getInstance().schedule(
-                            {
-                                if (!disposed) {
-                                    // The failed (ERR_UNKNOWN_URL_SCHEME) load already fired
-                                    // onLoadEnd for its error page, tripping the once-only
-                                    // [fired] guard. Reset it so this reload's onLoadEnd
-                                    // re-fires the scene-push — otherwise the first restored
-                                    // editor on IDE restart renders empty.
-                                    armForReload()
-                                    browser.cefBrowser.loadURL(startUrlWithTheme())
-                                }
-                            },
-                            SCHEME_RELOAD_DELAY_MS.toLong(),
-                            TimeUnit.MILLISECONDS
-                        )
-                    }
-                }
-            },
-            browser.cefBrowser
-        )
+            }
+        }
     }
 
     /**
@@ -471,26 +456,26 @@ class ExcalidrawJcefHost private constructor(
     }
 
     /**
-     * Fires all registered [loadEndListeners] exactly once, on the EDT.
-     * Subsequent calls are no-ops (fired-once invariant).
-     * Called from the JCEF [CefLoadHandlerAdapter.onLoadEnd] callback (production) or
-     * directly via reflection in unit tests.
-     *
-     * A05: guarded by [disposed] — no callbacks after disposal.
-     */
-    /**
      * Re-arms the once-only [fireLoadEnd] so the next main-frame onLoadEnd fires the
-     * registered listeners again. Used before a scheme-not-ready retry reload (the failed
-     * load's error page already tripped [fired]); the registered listeners are idempotent
-     * (re-install the return channel, re-request the scene), so re-running them on the
-     * successful reload is what restores the scene.
+     * registered listeners again. Called from [registerLoadLifecycle]'s scheme-not-ready
+     * retry reload (the failed load's error page already tripped [fired]); the registered
+     * listeners are idempotent (re-install the return channel, re-request the scene), so
+     * re-running them on the successful reload is what restores the scene.
      */
-    internal fun armForReload() {
+    private fun armForReload() {
         if (disposed) return
         fired = false
     }
 
-    internal fun fireLoadEnd() {
+    /**
+     * Fires all registered [loadEndListeners] exactly once, on the EDT.
+     * Subsequent calls are no-ops (fired-once invariant).
+     * Wired to [browserHandle]'s main-frame onLoadEnd event by [registerLoadLifecycle]
+     * (production and test mode alike — see [CefBrowserHandle]).
+     *
+     * A05: guarded by [disposed] — no callbacks after disposal.
+     */
+    private fun fireLoadEnd() {
         if (disposed || fired) return
         fired = true
 
@@ -529,25 +514,17 @@ class ExcalidrawJcefHost private constructor(
             ?: error("ExcalidrawJcefHost.component is not available in test mode")
 
     /**
-     * Disposes the underlying [JBCefBrowser], releasing all JCEF resources.
-     * Called automatically by the IDE when the parent [ExcalidrawFileEditor] is disposed.
+     * Disposes the underlying browser (via [browserHandle]), releasing all JCEF resources.
+     * Called automatically by the IDE when the parent [ExcalidrawFileEditor] is disposed —
+     * and directly by unit tests, since [browserHandle] is a no-op [FakeCefBrowserHandle]
+     * in test mode (no separate test-only dispose method needed).
      * AD-3: clean disposal chain — no leaks.
      * A05: sets [disposed] flag so that subsequent [fireLoadEnd] calls are no-ops.
      */
     override fun dispose() {
         disposed = true
         loadEndListeners.clear()
-        browser?.dispose()
-    }
-
-    /**
-     * Lightweight dispose used by unit tests that do not hold a real [JBCefBrowser].
-     * Sets [disposed] = true so that [fireLoadEnd] becomes a no-op (same invariant
-     * as the production [dispose], but without touching a null browser reference).
-     */
-    fun disposeForTest() {
-        disposed = true
-        loadEndListeners.clear()
+        browserHandle.dispose()
     }
 
     /**
