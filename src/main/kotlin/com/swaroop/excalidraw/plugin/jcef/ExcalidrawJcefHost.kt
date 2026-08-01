@@ -11,6 +11,7 @@ import com.intellij.ui.jcef.JBCefApp
 import com.intellij.ui.jcef.JBCefBrowser
 import com.intellij.ui.jcef.JcefShortcutProvider
 import com.swaroop.excalidraw.plugin.theme.ThemeMapper
+import com.swaroop.excalidraw.plugin.util.runOnEdtOrNow
 import org.cef.browser.CefBrowser
 import org.cef.browser.CefFrame
 import org.cef.callback.CefSchemeRegistrar
@@ -482,22 +483,7 @@ class ExcalidrawJcefHost private constructor(
         val snapshot = loadEndListeners.toList()
         if (snapshot.isEmpty()) return
 
-        val application = try {
-            ApplicationManager.getApplication()
-        } catch (_: Exception) {
-            // In unit-test environments the application may not be available.
-            // Fall back to direct invocation on the calling thread.
-            null
-        }
-
-        if (application != null) {
-            application.invokeLater {
-                if (!disposed) {
-                    snapshot.forEach { it() }
-                }
-            }
-        } else {
-            // Test-mode fallback: invoke synchronously so tests can assert call counts.
+        runOnEdtOrNow {
             if (!disposed) {
                 snapshot.forEach { it() }
             }

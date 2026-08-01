@@ -10,6 +10,7 @@ import com.intellij.ui.jcef.JBCefBrowser
 import com.intellij.ui.jcef.JBCefJSQuery
 import com.swaroop.excalidraw.plugin.export.ExportMessage
 import com.swaroop.excalidraw.plugin.persistence.Scene
+import com.swaroop.excalidraw.plugin.util.runOnEdtOrNow
 
 /**
  * ExcalidrawJsBridge — typed bidirectional channel between Kotlin and the
@@ -616,9 +617,7 @@ class ExcalidrawJsBridge private constructor(
     private fun dispatch(rawJson: String, parsed: BridgeMessage?) {
         when (parsed) {
             is BridgeMessage.SceneChange -> {
-                ApplicationManager.getApplication()?.invokeLater {
-                    sceneChangeHandler(parsed.payload)
-                } ?: sceneChangeHandler(parsed.payload)   // fallback for unit-test context without Application
+                runOnEdtOrNow { sceneChangeHandler(parsed.payload) }
             }
             is BridgeMessage.ExportResult -> {
                 exportResultCallback.deliver(parsed.payload)
@@ -632,9 +631,7 @@ class ExcalidrawJsBridge private constructor(
             is BridgeMessage.LibraryChange -> {
                 val cb = libraryChangeCallback
                 if (cb != null) {
-                    ApplicationManager.getApplication()?.invokeLater {
-                        cb(parsed.libraryItemsJson)
-                    } ?: cb(parsed.libraryItemsJson)   // fallback for unit-test context without Application
+                    runOnEdtOrNow { cb(parsed.libraryItemsJson) }
                 }
             }
             is BridgeMessage.Ready, null -> {
@@ -922,16 +919,12 @@ private class OneShotCallback<T> {
 
     /**
      * If a callback is registered, clears the slot and invokes it with [value] exactly
-     * once — on the EDT via [ApplicationManager.getApplication].invokeLater, or directly
-     * if no [com.intellij.openapi.application.Application] is available (unit tests).
-     * A no-op if no callback is registered.
+     * once via [runOnEdtOrNow]. A no-op if no callback is registered.
      */
     fun deliver(value: T) {
         val cb = callback ?: return
         callback = null
-        ApplicationManager.getApplication()?.invokeLater {
-            cb(value)
-        } ?: cb(value)
+        runOnEdtOrNow { cb(value) }
     }
 
     /** Clears the slot without delivering, so a pending callback never fires. */
