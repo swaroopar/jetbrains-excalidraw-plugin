@@ -7,6 +7,7 @@ import com.intellij.openapi.vfs.VirtualFile
 import com.swaroop.excalidraw.plugin.bridge.ExcalidrawJsBridge
 import com.swaroop.excalidraw.plugin.editor.StubVirtualFile
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawPersistenceService
+import com.swaroop.excalidraw.plugin.persistence.ScenePersistence
 import com.swaroop.excalidraw.plugin.persistence.Scene
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
@@ -23,9 +24,16 @@ class PngSceneDocumentTest {
 
     private val stubPngBytes = ByteArray(8) { i -> if (i == 0) 0x89.toByte() else 0 }
 
-    private class RecordingPersistenceService : ExcalidrawPersistenceService() {
+    private class RecordingPersistenceService(
+        private val real: ScenePersistence = ExcalidrawPersistenceService()
+    ) : ScenePersistence {
         var writePngSceneCallCount = 0
         var lastWrittenBase64: String? = null
+
+        override fun readScene(file: VirtualFile) = real.readScene(file)
+        override fun readSceneOrNew(file: VirtualFile) = real.readSceneOrNew(file)
+
+        override fun writeScene(file: VirtualFile, scene: Scene) = real.writeScene(file, scene)
 
         override fun writePngScene(file: VirtualFile, base64Png: String) {
             writePngSceneCallCount++

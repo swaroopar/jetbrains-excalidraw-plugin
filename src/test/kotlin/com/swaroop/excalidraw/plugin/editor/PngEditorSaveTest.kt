@@ -6,6 +6,7 @@ import com.swaroop.excalidraw.plugin.editor.autosave.ManualScheduler
 import com.swaroop.excalidraw.plugin.jcef.ExcalidrawJcefHost
 import com.swaroop.excalidraw.plugin.jcef.FakeCefBrowserHandle
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawPersistenceService
+import com.swaroop.excalidraw.plugin.persistence.ScenePersistence
 import com.intellij.openapi.vfs.VirtualFile
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -35,15 +36,21 @@ class PngEditorSaveTest {
     // -------------------------------------------------------------------------
 
     /**
-     * In-test fake for [ExcalidrawPersistenceService].
-     *
-     * Overrides both [writeScene] and [writePngScene] to record calls without
-     * requiring a live IntelliJ Application or FileDocumentManager.
+     * In-test [ScenePersistence] fake — satisfies the port directly instead of
+     * subclassing production code. Overrides both [writeScene] and [writePngScene]
+     * to record calls without requiring a live IntelliJ Application or
+     * FileDocumentManager; reads delegate to a real [ExcalidrawPersistenceService]
+     * since this test never exercises the read path.
      */
-    private class FakePersistenceService : ExcalidrawPersistenceService() {
+    private class FakePersistenceService(
+        private val real: ScenePersistence = ExcalidrawPersistenceService()
+    ) : ScenePersistence {
         var writePngSceneCallCount: Int = 0
         var writtenPngBytes: ByteArray? = null
         var writeSceneCallCount: Int = 0
+
+        override fun readScene(file: VirtualFile) = real.readScene(file)
+        override fun readSceneOrNew(file: VirtualFile) = real.readSceneOrNew(file)
 
         override fun writeScene(file: VirtualFile, scene: Scene) {
             writeSceneCallCount++

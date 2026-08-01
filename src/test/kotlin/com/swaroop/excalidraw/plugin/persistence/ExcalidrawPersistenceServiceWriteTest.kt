@@ -226,52 +226,6 @@ class ExcalidrawPersistenceServiceWriteTest {
     }
 
     // -------------------------------------------------------------------------
-    // TC-W-06: writeScene with save-tracking subclass — saveDocument invoked (AC-E3-03)
-    // -------------------------------------------------------------------------
-
-    /**
-     * Verifies that the write path routes through [Document.setText] and that
-     * [ExcalidrawPersistenceService.writeSceneToDocument] can be overridden to
-     * inject save-call tracking, demonstrating the write participates in the
-     * Document API flow (AC-E3-03: write participates in standard write-action flow).
-     *
-     * A [SaveTrackingService] subclass overrides [writeSceneToDocument] to record
-     * how many times the inner write helper was called, without requiring a live
-     * ApplicationManager or FileDocumentManager. This confirms that [writeScene]
-     * (the public API) delegates through the Document write path when a Document
-     * is available.
-     */
-    @Test
-    fun `writeSceneToDocument invocation count is tracked via Document write path`() {
-        var writeSceneToDocumentCallCount = 0
-
-        // Subclass overrides writeSceneToDocument to count calls (open class per phase-04 spec)
-        val trackingService = object : ExcalidrawPersistenceService() {
-            override fun writeSceneToDocument(document: Document, json: String) {
-                writeSceneToDocumentCallCount++
-                super.writeSceneToDocument(document, json)
-            }
-        }
-
-        val doc = CapturingDocument()
-        val json = """{"type":"excalidraw","version":2,"source":null,"elements":[],"appState":{},"files":null}"""
-
-        // Call the internal helper directly — simulates the WriteAction body
-        trackingService.writeSceneToDocument(doc, json)
-
-        assertEquals(
-            1,
-            writeSceneToDocumentCallCount,
-            "writeSceneToDocument must be called exactly once per write operation"
-        )
-        assertEquals(
-            json,
-            doc.getText(),
-            "document.getText() must contain the written JSON after writeSceneToDocument"
-        )
-    }
-
-    // -------------------------------------------------------------------------
     // TC-W-07: writeScene null-document safe no-op (AC-E3-03 edge case)
     // -------------------------------------------------------------------------
 

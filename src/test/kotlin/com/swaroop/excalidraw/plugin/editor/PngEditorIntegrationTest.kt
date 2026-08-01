@@ -6,6 +6,7 @@ import com.swaroop.excalidraw.plugin.persistence.Scene
 import com.swaroop.excalidraw.plugin.jcef.ExcalidrawJcefHost
 import com.swaroop.excalidraw.plugin.jcef.FakeCefBrowserHandle
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawPersistenceService
+import com.swaroop.excalidraw.plugin.persistence.ScenePersistence
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -34,17 +35,22 @@ class PngEditorIntegrationTest {
     // -------------------------------------------------------------------------
 
     /**
-     * In-test fake for [ExcalidrawPersistenceService].
-     *
-     * Overrides [writeScene] and [writePngScene] to record calls without
-     * requiring a live IntelliJ Application or VFS WriteAction.
-     * [writtenBytes] captures the decoded bytes produced by [writePngScene]
-     * so tests can verify the PNG magic byte.
+     * In-test [ScenePersistence] fake — satisfies the port directly instead of
+     * subclassing production code. Overrides [writeScene] and [writePngScene] to
+     * record calls without requiring a live IntelliJ Application or VFS WriteAction.
+     * [writtenBytes] captures the decoded bytes produced by [writePngScene] so tests
+     * can verify the PNG magic byte; reads delegate to a real
+     * [ExcalidrawPersistenceService] since this test never exercises the read path.
      */
-    private class FakePersistenceService : ExcalidrawPersistenceService() {
+    private class FakePersistenceService(
+        private val real: ScenePersistence = ExcalidrawPersistenceService()
+    ) : ScenePersistence {
         var writtenBytes: ByteArray? = null
         var writeSceneCallCount: Int = 0
         var writePngSceneCallCount: Int = 0
+
+        override fun readScene(file: VirtualFile) = real.readScene(file)
+        override fun readSceneOrNew(file: VirtualFile) = real.readSceneOrNew(file)
 
         override fun writeScene(file: VirtualFile, scene: Scene) {
             writeSceneCallCount++
