@@ -1,5 +1,6 @@
 package com.swaroop.excalidraw.plugin.persistence
 
+import com.intellij.openapi.application.Application
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.editor.Document
@@ -76,13 +77,7 @@ open class ExcalidrawPersistenceService {
      * @param scene the scene to persist.
      */
     open fun writeScene(file: VirtualFile, scene: Scene) {
-        val app = ApplicationManager.getApplication()
-        if (app == null) {
-            // Headless / plain-JUnit context: no Application available.
-            // FileDocumentManager.getInstance() would throw NPE; log and no-op.
-            LOG.warn("writeScene: no Application available for ${file.path} — skipping write")
-            return
-        }
+        val app = requireApplication("writeScene", file.path) ?: return
 
         val document: Document? = FileDocumentManager.getInstance().getDocument(file)
         if (document == null) {
@@ -114,13 +109,7 @@ open class ExcalidrawPersistenceService {
      * @param base64Png the PNG content as a standard Base64-encoded string.
      */
     open fun writePngScene(file: VirtualFile, base64Png: String) {
-        val app = ApplicationManager.getApplication()
-        if (app == null) {
-            // Headless / plain-JUnit context: no Application available.
-            // VFS WriteAction would throw; log and no-op instead.
-            LOG.warn("writePngScene: no Application available for ${file.path} — skipping write")
-            return
-        }
+        val app = requireApplication("writePngScene", file.path) ?: return
         // A03: Base64 decoding of the payload — standard JVM decoder, no execution of content.
         val bytes = java.util.Base64.getDecoder().decode(base64Png)
         // A05: binary write via VFS setBinaryContent inside WriteAction for undo-buffer
@@ -149,6 +138,19 @@ open class ExcalidrawPersistenceService {
     // -------------------------------------------------------------------------
     // Internal helpers
     // -------------------------------------------------------------------------
+
+    /**
+     * Returns the running [Application], or `null` (after logging a warning) when
+     * called in a headless / plain-JUnit context with no Application available —
+     * the signal for the caller to skip its write rather than crash.
+     */
+    private fun requireApplication(methodName: String, filePath: String): Application? {
+        val app = ApplicationManager.getApplication()
+        if (app == null) {
+            LOG.warn("$methodName: no Application available for $filePath — skipping write")
+        }
+        return app
+    }
 
     /**
      * Reads raw bytes from [file], using [ReadAction] when an IntelliJ Application
