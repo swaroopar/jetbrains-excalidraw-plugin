@@ -144,16 +144,6 @@ class ExcalidrawThemeController(
 
     companion object {
         /**
-         * Production listener registrar: subscribes [onThemeChanged] to the
-         * Application-level [LafManagerListener.TOPIC] message bus topic.
-         *
-         * The connection is parented to a [Disposable] that is managed by the
-         * caller (see [ExcalidrawThemeController] constructor documentation).
-         * Passing a single-use [Disposable] adapter ensures the connection is
-         * disconnected when the controller is disposed — without leaking a
-         * reference to [this] before the object is fully initialised.
-         */
-        /**
          * Subscribes [onThemeChanged] to [LafManagerListener.TOPIC] on the
          * Application message bus.
          *

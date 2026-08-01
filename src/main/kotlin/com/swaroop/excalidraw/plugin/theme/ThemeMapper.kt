@@ -36,8 +36,9 @@ object ThemeMapper {
      * Maps a LookAndFeel display name to the Excalidraw theme string.
      *
      * Returns "dark" when [lafName] (case-insensitive) contains:
-     * - "dark"     — e.g. "Darcula", "Dark+", "One Dark"
-     * - "darcula"  — covered by the "dark" check above
+     * - "dark"     — e.g. "Dark+", "One Dark"
+     * - "darcula"  — checked independently of "dark", since "darcula" does not
+     *   contain the substring "dark" (no "k" after "dar")
      * - "contrast" — e.g. "High Contrast" (JetBrains HC themes are dark-background)
      *
      * Returns "light" for null input or any name not matching the dark heuristics.
