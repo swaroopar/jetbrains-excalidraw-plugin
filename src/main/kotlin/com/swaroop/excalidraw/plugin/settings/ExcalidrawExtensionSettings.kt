@@ -5,6 +5,7 @@ import com.intellij.openapi.components.PersistentStateComponent
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
+import com.swaroop.excalidraw.plugin.filetype.ExcalidrawFileMatcher
 
 /**
  * Application-level persistent service that holds the list of file extensions
@@ -31,10 +32,12 @@ class ExcalidrawExtensionSettings : PersistentStateComponent<ExcalidrawExtension
      *
      * A plain class (not data class) with a no-arg constructor is required so
      * the IntelliJ XML deserializer can instantiate it reflectively. The default
-     * value of [extensions] satisfies AC-E7-02.
+     * value of [extensions] satisfies AC-E7-02 and is sourced from
+     * [ExcalidrawFileMatcher.DEFAULT_EXTENSIONS] — the single owner of the
+     * accepted-extension set (see [ExcalidrawFileMatcher] for why).
      */
     class State {
-        var extensions: MutableList<String> = mutableListOf(".excalidraw", ".excalidraw.png")
+        var extensions: MutableList<String> = ExcalidrawFileMatcher.DEFAULT_EXTENSIONS.toMutableList()
     }
 
     private var state: State = State()

@@ -21,6 +21,7 @@ import com.swaroop.excalidraw.plugin.editor.autosave.AlarmScheduler
 import com.swaroop.excalidraw.plugin.editor.autosave.AutosaveController
 import com.swaroop.excalidraw.plugin.editor.autosave.ManualScheduler
 import com.swaroop.excalidraw.plugin.editor.autosave.Scheduler
+import com.swaroop.excalidraw.plugin.filetype.ExcalidrawFileMatcher
 import com.swaroop.excalidraw.plugin.jcef.ExcalidrawJcefHost
 import com.swaroop.excalidraw.plugin.jcef.LibraryBrowserDialog
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawLibraryService
@@ -162,15 +163,12 @@ class ExcalidrawFileEditor private constructor(
         /**
          * Returns true when [name] identifies a scene-embedded PNG file.
          *
-         * The `.excalidraw.png` extension is a strict suffix check — `String.endsWith`
-         * does not match a plain `.excalidraw` file (no prefix ambiguity).
-         *
-         * Private to the Companion to keep the PNG-detection logic encapsulated and
-         * independently testable without constructing a full editor instance.
+         * Delegates to [ExcalidrawFileMatcher.isExcalidrawPng] — the single owner of
+         * the `.excalidraw.png` match rule — rather than hardcoding the suffix here.
          *
          * @param name The file name (not a full path) to test.
          */
-        private fun isExcalidrawPng(name: String): Boolean = name.endsWith(".excalidraw.png")
+        private fun isExcalidrawPng(name: String): Boolean = ExcalidrawFileMatcher.isExcalidrawPng(name)
 
         /**
          * Normalises the contents of a `.excalidrawlib` file into a JSON array of
