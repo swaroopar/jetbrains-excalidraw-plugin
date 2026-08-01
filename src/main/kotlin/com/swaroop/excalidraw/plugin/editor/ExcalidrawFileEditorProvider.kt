@@ -7,6 +7,7 @@ import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.serviceContainer.NonInjectable
+import com.swaroop.excalidraw.plugin.filetype.ExcalidrawFileMatcher
 import com.swaroop.excalidraw.plugin.settings.ExcalidrawExtensionSettings
 
 /**
@@ -79,30 +80,18 @@ class ExcalidrawFileEditorProvider @NonInjectable constructor(
         /**
          * The default set of file-name suffixes accepted by this provider.
          *
-         * Both ".excalidraw" (plain JSON scene files) and ".excalidraw.png"
-         * (scene-embedded PNG, requirement E6) are listed. Longer / more specific
-         * suffixes appear first so that a naive iteration over the list resolves
-         * ".excalidraw.png" before ".excalidraw", which is safer when used with
-         * [String.startsWith]-based logic elsewhere.
-         *
-         * Note: [String.endsWith] naturally distinguishes ".excalidraw" from
-         * ".excalidraw.png" — a file ending in ".excalidraw.png" does NOT end in
-         * ".excalidraw", so no ordering concern arises in [accept].
-         *
-         * Replaces the former `ACCEPTED_SUFFIXES` constant (task-09-004 retrofit).
-         * Byte-identical to the old constant — all existing tests remain valid.
+         * Delegates to [ExcalidrawFileMatcher.DEFAULT_EXTENSIONS] — the single owner
+         * of the accepted-extension set — rather than declaring its own copy.
          */
-        val DEFAULT_SUFFIXES: List<String> = listOf(
-            ".excalidraw.png",
-            ".excalidraw",
-        )
+        val DEFAULT_SUFFIXES: List<String> = ExcalidrawFileMatcher.DEFAULT_EXTENSIONS
 
         /**
          * Returns `true` if [fileName] ends with one of the [DEFAULT_SUFFIXES].
          *
-         * Exposed for unit testing without a live VirtualFile. Performs a case-sensitive
-         * comparison — consistent with how IntelliJ Platform resolves file types on
-         * case-sensitive file systems (Linux CI).
+         * Exposed for unit testing without a live VirtualFile. Delegates to
+         * [ExcalidrawFileMatcher.matches] — case-insensitive, the same rule
+         * [acceptsFile] uses, so `accept()` can no longer disagree with itself
+         * depending on which call path a filename takes.
          *
          * AC-FileEditorProvider-01: ".excalidraw" suffix -> true
          * AC-FileEditorProvider-02: ".excalidraw.png" suffix -> true (activated in E6/phase-07)
@@ -110,7 +99,7 @@ class ExcalidrawFileEditorProvider @NonInjectable constructor(
          * AC-FileEditorProvider-04: ".json" -> false
          */
         fun acceptsFileName(fileName: String): Boolean =
-            DEFAULT_SUFFIXES.any { suffix -> fileName.endsWith(suffix) }
+            ExcalidrawFileMatcher.matches(fileName, DEFAULT_SUFFIXES)
 
         /**
          * Creates a provider instance whose [accept] method uses [extensions] directly,
@@ -152,10 +141,8 @@ class ExcalidrawFileEditorProvider @NonInjectable constructor(
      * Exposed as `internal` so that [ExcalidrawFileEditorProviderExtensionsTest] can call
      * it directly through [createForTest] instances without requiring an IDE project stub.
      */
-    internal fun acceptsFile(file: VirtualFile): Boolean {
-        val suffixes = extensionsProvider()
-        return suffixes.any { file.name.endsWith(it, ignoreCase = true) }
-    }
+    internal fun acceptsFile(file: VirtualFile): Boolean =
+        ExcalidrawFileMatcher.matches(file.name, extensionsProvider())
 
     /**
      * Instantiates and returns an [ExcalidrawFileEditor] for the given file.
