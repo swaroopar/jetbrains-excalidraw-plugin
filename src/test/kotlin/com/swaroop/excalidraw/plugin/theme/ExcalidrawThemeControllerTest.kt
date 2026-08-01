@@ -5,6 +5,7 @@ import com.swaroop.excalidraw.plugin.bridge.ExcalidrawJsBridge
 import com.swaroop.excalidraw.plugin.editor.ExcalidrawFileEditor
 import com.swaroop.excalidraw.plugin.editor.StubVirtualFile
 import com.swaroop.excalidraw.plugin.jcef.ExcalidrawJcefHost
+import com.swaroop.excalidraw.plugin.jcef.FakeCefBrowserHandle
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawPersistenceService
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -210,7 +211,8 @@ class ExcalidrawThemeControllerTest {
             listenerRegistrar = { _ -> /* no-op: no real message bus in tests */ }
         )
 
-        val stubHost = ExcalidrawJcefHost.createForTest()
+        val stubHostHandle = FakeCefBrowserHandle()
+        val stubHost = ExcalidrawJcefHost.createForTest(stubHostHandle)
         val file = StubVirtualFile(
             "test.excalidraw",
             """{"type":"excalidraw","version":2,"source":"test","elements":[],"appState":{},"files":{}}""".toByteArray()
@@ -231,8 +233,7 @@ class ExcalidrawThemeControllerTest {
         )
 
         // Trigger the loadEnd callback (simulates JCEF page-load complete)
-        stubHost.fireLoadEnd()
-
+        stubHostHandle.simulateLoadEnd()
         // AFTER loadEnd: exactly one __excalidrawSetTheme__ call must be present
         assertTrue(
             injectedJs.any { it.contains("__excalidrawSetTheme__") },
@@ -264,7 +265,8 @@ class ExcalidrawThemeControllerTest {
             listenerRegistrar = { _ -> /* no-op */ }
         )
 
-        val stubHost = ExcalidrawJcefHost.createForTest()
+        val stubHostHandle = FakeCefBrowserHandle()
+        val stubHost = ExcalidrawJcefHost.createForTest(stubHostHandle)
         val file = StubVirtualFile(
             "order.excalidraw",
             """{"type":"excalidraw","version":2,"source":"test","elements":[],"appState":{},"files":{}}""".toByteArray()
@@ -278,8 +280,7 @@ class ExcalidrawThemeControllerTest {
             themeController = themeController
         )
 
-        stubHost.fireLoadEnd()
-
+        stubHostHandle.simulateLoadEnd()
         val loadSceneIdx = injectedJs.indexOfFirst { it.contains("__excalidrawLoadScene__") }
         val themeIdx = injectedJs.indexOfFirst { it.contains("__excalidrawSetTheme__") }
 
@@ -316,7 +317,8 @@ class ExcalidrawThemeControllerTest {
             listenerRegistrar = { onThemeChanged -> capturedListener = onThemeChanged }
         )
 
-        val stubHost = ExcalidrawJcefHost.createForTest()
+        val stubHostHandle = FakeCefBrowserHandle()
+        val stubHost = ExcalidrawJcefHost.createForTest(stubHostHandle)
         val file = StubVirtualFile(
             "lifecycle.excalidraw",
             """{"type":"excalidraw","version":2,"source":"test","elements":[],"appState":{},"files":{}}""".toByteArray()
@@ -331,8 +333,7 @@ class ExcalidrawThemeControllerTest {
         )
 
         // Trigger loadEnd so pushCurrentTheme() is called (sets ready=true)
-        stubHost.fireLoadEnd()
-
+        stubHostHandle.simulateLoadEnd()
         // Record injection count after loadEnd
         val countAfterLoadEnd = injectedJs.size
 

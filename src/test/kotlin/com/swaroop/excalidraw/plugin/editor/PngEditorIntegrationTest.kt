@@ -4,6 +4,7 @@ import com.intellij.openapi.vfs.VirtualFile
 import com.swaroop.excalidraw.plugin.bridge.ExcalidrawJsBridge
 import com.swaroop.excalidraw.plugin.persistence.Scene
 import com.swaroop.excalidraw.plugin.jcef.ExcalidrawJcefHost
+import com.swaroop.excalidraw.plugin.jcef.FakeCefBrowserHandle
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawPersistenceService
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
@@ -94,7 +95,8 @@ class PngEditorIntegrationTest {
             injector = { js -> capturedJs.add(js) }
         )
         val file = StubVirtualFile("valid.excalidraw.png", stubPngBytes)
-        val stubHost = ExcalidrawJcefHost.createForTest()
+        val stubHostHandle = FakeCefBrowserHandle()
+        val stubHost = ExcalidrawJcefHost.createForTest(stubHostHandle)
         val fakePersistence = FakePersistenceService()
 
         val editor = ExcalidrawFileEditor.createForTest(
@@ -106,8 +108,7 @@ class PngEditorIntegrationTest {
         )
 
         // Simulate the JCEF loadEnd event — triggers the PNG async path
-        stubHost.fireLoadEnd()
-
+        stubHostHandle.simulateLoadEnd()
         assertTrue(
             capturedJs.any { "__excalidrawLoadPng__" in it },
             "After loadEnd on .excalidraw.png, capturedJs must contain '__excalidrawLoadPng__'. " +
@@ -155,7 +156,8 @@ class PngEditorIntegrationTest {
 
         val bridge = ExcalidrawJsBridge.createForTest(injector = { js -> capturedJs.add(js) })
         val file = StubVirtualFile("save.excalidraw.png", stubPngBytes)
-        val stubHost = ExcalidrawJcefHost.createForTest()
+        val stubHostHandle = FakeCefBrowserHandle()
+        val stubHost = ExcalidrawJcefHost.createForTest(stubHostHandle)
 
         val editor = ExcalidrawFileEditor.createForTest(
             file = file,
@@ -169,7 +171,7 @@ class PngEditorIntegrationTest {
         // extraction whose scene has one __baseline__ element. This arms the autosave
         // controller and seeds the baseline, so the empty-elements edit below counts as
         // a real change.
-        stubHost.fireLoadEnd()
+        stubHostHandle.simulateLoadEnd()
         bridge.simulatePngExtracted(
             """{"type":"pngExtracted","sceneJson":${com.google.gson.Gson().toJson(
                 """{"type":"excalidraw","elements":[{"type":"__baseline__"}],"appState":{}}"""
@@ -234,7 +236,8 @@ class PngEditorIntegrationTest {
 
         val bridge = ExcalidrawJsBridge.createForTest(injector = { js -> capturedJs.add(js) })
         val file = StubVirtualFile("valid.excalidraw.png", stubPngBytes)
-        val stubHost = ExcalidrawJcefHost.createForTest()
+        val stubHostHandle = FakeCefBrowserHandle()
+        val stubHost = ExcalidrawJcefHost.createForTest(stubHostHandle)
 
         val editor = ExcalidrawFileEditor.createForTest(
             file = file,
@@ -246,8 +249,7 @@ class PngEditorIntegrationTest {
         )
 
         // Simulate the JCEF loadEnd event
-        stubHost.fireLoadEnd()
-
+        stubHostHandle.simulateLoadEnd()
         // Simulate PNG extraction failure — no embedded Excalidraw scene
         bridge.simulatePngExtracted(
             """{"type":"pngExtracted","error":"No Excalidraw scene found in PNG"}"""

@@ -2,6 +2,7 @@ package com.swaroop.excalidraw.plugin.editor
 
 import com.swaroop.excalidraw.plugin.bridge.ExcalidrawJsBridge
 import com.swaroop.excalidraw.plugin.jcef.ExcalidrawJcefHost
+import com.swaroop.excalidraw.plugin.jcef.FakeCefBrowserHandle
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawPersistenceService
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
@@ -69,7 +70,8 @@ class ExcalidrawFileEditorTest {
         )
 
         val file = stubVirtualFile("test.excalidraw", validSceneJson)
-        val stubHost = ExcalidrawJcefHost.createForTest()
+        val stubHostHandle = FakeCefBrowserHandle()
+        val stubHost = ExcalidrawJcefHost.createForTest(stubHostHandle)
 
         val editor = ExcalidrawFileEditor.createForTest(
             file = file,
@@ -80,8 +82,7 @@ class ExcalidrawFileEditorTest {
         )
 
         // Trigger the loadEnd callback (simulates JCEF page-load complete)
-        stubHost.fireLoadEnd()
-
+        stubHostHandle.simulateLoadEnd()
         // AC-E1-01: bridge.loadScene must have been called with correct scene
         assertTrue(capturedJs.isNotEmpty(), "bridge.loadScene must produce JS injection after loadEnd")
 
@@ -111,7 +112,8 @@ class ExcalidrawFileEditorTest {
         )
 
         val file = stubVirtualFile("scene.excalidraw", validSceneJson)
-        val stubHost = ExcalidrawJcefHost.createForTest()
+        val stubHostHandle = FakeCefBrowserHandle()
+        val stubHost = ExcalidrawJcefHost.createForTest(stubHostHandle)
 
         val editor = ExcalidrawFileEditor.createForTest(
             file = file,
@@ -120,8 +122,7 @@ class ExcalidrawFileEditorTest {
             persistenceService = ExcalidrawPersistenceService()
         )
 
-        stubHost.fireLoadEnd()
-
+        stubHostHandle.simulateLoadEnd()
         assertTrue(capturedJs.isNotEmpty(), "No JS injected after loadEnd")
         // The fixture contains el1 — the serialised payload must carry it
         val js = capturedJs.last()
@@ -151,7 +152,8 @@ class ExcalidrawFileEditorTest {
         )
 
         val file = stubVirtualFile("corrupt.excalidraw", corruptSceneJson)
-        val stubHost = ExcalidrawJcefHost.createForTest()
+        val stubHostHandle = FakeCefBrowserHandle()
+        val stubHost = ExcalidrawJcefHost.createForTest(stubHostHandle)
 
         val editor = ExcalidrawFileEditor.createForTest(
             file = file,
@@ -162,8 +164,7 @@ class ExcalidrawFileEditorTest {
         )
 
         // Must not throw — ExcalidrawParseException is caught internally (AC-E1-02)
-        stubHost.fireLoadEnd()
-
+        stubHostHandle.simulateLoadEnd()
         // Notifier called exactly once with non-blank message
         assertEquals(1, notifierCalls.size,
             "notifier must be called exactly once when parse fails (AC-E1-02)")
@@ -185,7 +186,8 @@ class ExcalidrawFileEditorTest {
     fun `corrupt fixture VirtualFile content is unchanged after parse error`() {
         val originalBytes = corruptSceneJson.toByteArray(Charsets.UTF_8)
         val file = stubVirtualFile("corrupt-vf.excalidraw", corruptSceneJson)
-        val stubHost = ExcalidrawJcefHost.createForTest()
+        val stubHostHandle = FakeCefBrowserHandle()
+        val stubHost = ExcalidrawJcefHost.createForTest(stubHostHandle)
 
         val editor = ExcalidrawFileEditor.createForTest(
             file = file,
@@ -195,8 +197,7 @@ class ExcalidrawFileEditorTest {
             notifier = { _ -> }
         )
 
-        stubHost.fireLoadEnd()
-
+        stubHostHandle.simulateLoadEnd()
         // No writes via getOutputStream (close-captured)
         assertTrue(file.capturedWrites.isEmpty(),
             "VirtualFile must not be written when parse fails (AD-03)")
@@ -216,7 +217,8 @@ class ExcalidrawFileEditorTest {
     @Test
     fun `editor dispose after corrupt file parse error does not throw`() {
         val file = stubVirtualFile("corrupt2.excalidraw", corruptSceneJson)
-        val stubHost = ExcalidrawJcefHost.createForTest()
+        val stubHostHandle = FakeCefBrowserHandle()
+        val stubHost = ExcalidrawJcefHost.createForTest(stubHostHandle)
 
         val editor = ExcalidrawFileEditor.createForTest(
             file = file,
@@ -226,8 +228,7 @@ class ExcalidrawFileEditorTest {
             notifier = { _ -> }
         )
 
-        stubHost.fireLoadEnd()
-
+        stubHostHandle.simulateLoadEnd()
         // Dispose must be safe regardless of whether loadEnd triggered an error
         editor.dispose()
     }
@@ -253,7 +254,8 @@ class ExcalidrawFileEditorTest {
         )
 
         val file = stubVirtualFile("scene.excalidraw", validSceneJson)
-        val stubHost = ExcalidrawJcefHost.createForTest()
+        val stubHostHandle = FakeCefBrowserHandle()
+        val stubHost = ExcalidrawJcefHost.createForTest(stubHostHandle)
 
         val editor = ExcalidrawFileEditor.createForTest(
             file = file,
@@ -262,8 +264,7 @@ class ExcalidrawFileEditorTest {
             persistenceService = ExcalidrawPersistenceService()
         )
 
-        stubHost.fireLoadEnd()
-
+        stubHostHandle.simulateLoadEnd()
         // At least two JS injections: channel definition + loadScene call
         assertTrue(injectedJs.size >= 2,
             "loadEnd must inject at least the return channel and loadScene; got: $injectedJs")
@@ -307,7 +308,8 @@ class ExcalidrawFileEditorTest {
         )
 
         val file = stubVirtualFile("scene.excalidraw", validSceneJson)
-        val stubHost = ExcalidrawJcefHost.createForTest()
+        val stubHostHandle = FakeCefBrowserHandle()
+        val stubHost = ExcalidrawJcefHost.createForTest(stubHostHandle)
 
         val editor = ExcalidrawFileEditor.createForTest(
             file = file,
@@ -317,7 +319,7 @@ class ExcalidrawFileEditorTest {
             themeController = themeController
         )
 
-        stubHost.fireLoadEnd()
+        stubHostHandle.simulateLoadEnd()
         injectedJs.clear()
 
         editor.selectNotify()
