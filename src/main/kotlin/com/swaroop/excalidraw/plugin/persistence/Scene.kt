@@ -67,6 +67,9 @@ data class Scene(
         private val gson = Gson()
         private val CANONICAL_GSON: Gson = GsonBuilder().serializeNulls().create()
 
+        private fun fail(filePath: String, message: String): Nothing =
+            throw ExcalidrawParseException(filePath, IllegalArgumentException(message))
+
         /** A fresh, empty scene — used for a new/blank `.excalidraw` file. */
         fun empty(): Scene = Scene(
             type = "excalidraw",
@@ -85,7 +88,7 @@ data class Scene(
          */
         fun parseFile(content: String, filePath: String): Scene {
             if (content.isBlank()) {
-                throw ExcalidrawParseException(filePath, IllegalArgumentException("File content is empty"))
+                fail(filePath, "File content is empty")
             }
 
             val root: JsonObject = try {
@@ -99,36 +102,19 @@ data class Scene(
                 throw ExcalidrawParseException(filePath, ex)
             }
 
-            val elementsEl = root.get("elements")
-                ?: throw ExcalidrawParseException(
-                    filePath,
-                    IllegalArgumentException("Missing mandatory field: elements")
-                )
+            val elementsEl = root.get("elements") ?: fail(filePath, "Missing mandatory field: elements")
             if (!elementsEl.isJsonArray) {
-                throw ExcalidrawParseException(
-                    filePath,
-                    IllegalArgumentException("Field 'elements' must be a JSON array")
-                )
+                fail(filePath, "Field 'elements' must be a JSON array")
             }
 
-            val appStateEl = root.get("appState")
-                ?: throw ExcalidrawParseException(
-                    filePath,
-                    IllegalArgumentException("Missing mandatory field: appState")
-                )
+            val appStateEl = root.get("appState") ?: fail(filePath, "Missing mandatory field: appState")
             if (!appStateEl.isJsonObject) {
-                throw ExcalidrawParseException(
-                    filePath,
-                    IllegalArgumentException("Field 'appState' must be a JSON object")
-                )
+                fail(filePath, "Field 'appState' must be a JSON object")
             }
 
             val type = root.get("type")?.takeIf { it.isJsonPrimitive }?.asString ?: ""
             if (type != "excalidraw") {
-                throw ExcalidrawParseException(
-                    filePath,
-                    IllegalArgumentException("Field 'type' must be \"excalidraw\", got: \"$type\"")
-                )
+                fail(filePath, "Field 'type' must be \"excalidraw\", got: \"$type\"")
             }
 
             val version = root.get("version")
