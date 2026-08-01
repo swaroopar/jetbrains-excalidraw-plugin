@@ -9,8 +9,8 @@ import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.diagnostic.Logger
 
 /**
- * Service responsible for reading and writing `.excalidraw` files through the
- * IntelliJ Virtual File System.
+ * The production [ScenePersistence] adapter: reads and writes `.excalidraw` files
+ * through the IntelliJ Virtual File System.
  *
  * Secure-coding notes (A03 / A08):
  * - Uses Gson as the established, vetted JSON parser — no eval() or dynamic code.
@@ -18,10 +18,8 @@ import com.intellij.openapi.diagnostic.Logger
  *   (see [Scene.parseFile]).
  * - Write path uses IDE Document/VFS API exclusively — no java.io.File, no NIO.
  * - WriteAction ensures undo-buffer participation and IDE modified-state tracking.
- *
- * Declared as `open class` to allow subclassing in phase-07 (PNG embedding).
  */
-open class ExcalidrawPersistenceService {
+class ExcalidrawPersistenceService : ScenePersistence {
 
     companion object {
         private val LOG: Logger = Logger.getInstance(ExcalidrawPersistenceService::class.java)
@@ -39,7 +37,7 @@ open class ExcalidrawPersistenceService {
      * @throws ExcalidrawParseException if the content is empty, is not valid JSON,
      *         or is missing mandatory fields (elements, appState).
      */
-    fun readScene(file: VirtualFile): Scene {
+    override fun readScene(file: VirtualFile): Scene {
         val filePath = file.path
         val content: String = readContent(file)
         return Scene.parseFile(content, filePath)
@@ -54,7 +52,7 @@ open class ExcalidrawPersistenceService {
      * parse-error notification. Non-empty but malformed content still throws
      * [ExcalidrawParseException] so genuine corruption is surfaced.
      */
-    fun readSceneOrNew(file: VirtualFile): Scene {
+    override fun readSceneOrNew(file: VirtualFile): Scene {
         val filePath = file.path
         val content: String = readContent(file)
         return if (content.isBlank()) Scene.empty() else Scene.parseFile(content, filePath)
@@ -76,7 +74,7 @@ open class ExcalidrawPersistenceService {
      * @param file the VirtualFile to write; must be writable.
      * @param scene the scene to persist.
      */
-    open fun writeScene(file: VirtualFile, scene: Scene) {
+    override fun writeScene(file: VirtualFile, scene: Scene) {
         val app = requireApplication("writeScene", file.path) ?: return
 
         val document: Document? = FileDocumentManager.getInstance().getDocument(file)
@@ -108,7 +106,7 @@ open class ExcalidrawPersistenceService {
      * @param file the target [VirtualFile]; must be writable.
      * @param base64Png the PNG content as a standard Base64-encoded string.
      */
-    open fun writePngScene(file: VirtualFile, base64Png: String) {
+    override fun writePngScene(file: VirtualFile, base64Png: String) {
         val app = requireApplication("writePngScene", file.path) ?: return
         // A03: Base64 decoding of the payload — standard JVM decoder, no execution of content.
         val bytes = java.util.Base64.getDecoder().decode(base64Png)
@@ -131,7 +129,7 @@ open class ExcalidrawPersistenceService {
      * @param document the target Document.
      * @param json the JSON string to set as document content.
      */
-    open fun writeSceneToDocument(document: Document, json: String) {
+    fun writeSceneToDocument(document: Document, json: String) {
         document.setText(json)
     }
 

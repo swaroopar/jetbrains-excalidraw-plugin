@@ -5,6 +5,7 @@ import com.swaroop.excalidraw.plugin.editor.autosave.ManualScheduler
 import com.swaroop.excalidraw.plugin.jcef.ExcalidrawJcefHost
 import com.swaroop.excalidraw.plugin.jcef.FakeCefBrowserHandle
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawPersistenceService
+import com.swaroop.excalidraw.plugin.persistence.ScenePersistence
 import com.swaroop.excalidraw.plugin.persistence.Scene
 import com.intellij.openapi.vfs.VirtualFile
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -42,19 +43,28 @@ class AutosaveDebounceTest {
     // -------------------------------------------------------------------------
 
     /**
-     * In-test fake for [ExcalidrawPersistenceService].
-     *
-     * Overrides [writeScene] to record calls without requiring a live IntelliJ
-     * Application or FileDocumentManager (no IDE APIs involved).
+     * In-test [ScenePersistence] fake — satisfies the port directly instead of
+     * subclassing production code. Overrides [writeScene] to record calls without
+     * requiring a live IntelliJ Application or FileDocumentManager (no IDE APIs
+     * involved); reads delegate to a real [ExcalidrawPersistenceService] since this
+     * test never exercises the read path.
      */
-    private class FakePersistenceService : ExcalidrawPersistenceService() {
+    private class FakePersistenceService(
+        private val real: ScenePersistence = ExcalidrawPersistenceService()
+    ) : ScenePersistence {
         var writeSceneCallCount: Int = 0
         var lastWrittenScene: Scene? = null
+
+        override fun readScene(file: VirtualFile) = real.readScene(file)
+        override fun readSceneOrNew(file: VirtualFile) = real.readSceneOrNew(file)
 
         override fun writeScene(file: VirtualFile, scene: Scene) {
             writeSceneCallCount++
             lastWrittenScene = scene
         }
+
+        override fun writePngScene(file: VirtualFile, base64Png: String) =
+            real.writePngScene(file, base64Png)
     }
 
     // -------------------------------------------------------------------------

@@ -3,7 +3,7 @@ package com.swaroop.excalidraw.plugin.persistence.document
 import com.intellij.openapi.vfs.VirtualFile
 import com.swaroop.excalidraw.plugin.bridge.ExcalidrawJsBridge
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawParseException
-import com.swaroop.excalidraw.plugin.persistence.ExcalidrawPersistenceService
+import com.swaroop.excalidraw.plugin.persistence.ScenePersistence
 import com.swaroop.excalidraw.plugin.persistence.Scene
 
 /**
@@ -15,7 +15,7 @@ import com.swaroop.excalidraw.plugin.persistence.Scene
  * echo instead).
  */
 class JsonSceneDocument(
-    private val persistenceService: ExcalidrawPersistenceService
+    private val persistenceService: ScenePersistence
 ) : SceneDocument {
 
     override fun load(file: VirtualFile, bridge: ExcalidrawJsBridge, onResult: (SceneLoadResult) -> Unit) {

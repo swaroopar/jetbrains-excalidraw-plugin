@@ -27,6 +27,7 @@ import com.swaroop.excalidraw.plugin.jcef.LibraryBrowserDialog
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawLibraryService
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawParseException
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawPersistenceService
+import com.swaroop.excalidraw.plugin.persistence.ScenePersistence
 import com.swaroop.excalidraw.plugin.persistence.Scene
 import com.swaroop.excalidraw.plugin.persistence.document.JsonSceneDocument
 import com.swaroop.excalidraw.plugin.persistence.document.PngSceneDocument
@@ -93,7 +94,7 @@ class ExcalidrawFileEditor private constructor(
      * consumers outside the `com.swaroop.excalidraw.plugin` module.
      */
     internal val bridge: ExcalidrawJsBridge,
-    private val persistenceService: ExcalidrawPersistenceService,
+    private val persistenceService: ScenePersistence,
     /**
      * Owns load/save for this file's on-disk scene format (plain JSON vs
      * scene-embedded PNG) — see [SceneDocument]. Chosen once, in the factory
@@ -231,7 +232,7 @@ class ExcalidrawFileEditor private constructor(
             file: VirtualFile,
             jcefHost: ExcalidrawJcefHost,
             bridge: ExcalidrawJsBridge,
-            persistenceService: ExcalidrawPersistenceService,
+            persistenceService: ScenePersistence,
             notifier: (String) -> Unit,
             scheduler: Scheduler?,
             themeController: ExcalidrawThemeController?,
@@ -367,7 +368,7 @@ class ExcalidrawFileEditor private constructor(
             file: VirtualFile,
             jcefHost: ExcalidrawJcefHost,
             bridge: ExcalidrawJsBridge,
-            persistenceService: ExcalidrawPersistenceService = ExcalidrawPersistenceService(),
+            persistenceService: ScenePersistence = ExcalidrawPersistenceService(),
             notifier: (String) -> Unit = { message ->
                 LOG.warn("ExcalidrawFileEditor [test-mode] parse error: $message")
             },
