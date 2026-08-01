@@ -34,6 +34,7 @@ import com.swaroop.excalidraw.plugin.persistence.document.SceneDocument
 import com.swaroop.excalidraw.plugin.persistence.document.SceneLoadResult
 import com.swaroop.excalidraw.plugin.persistence.document.SceneSaveResult
 import com.swaroop.excalidraw.plugin.theme.ExcalidrawThemeController
+import com.swaroop.excalidraw.plugin.util.runOnEdtOrNow
 import java.beans.PropertyChangeListener
 import java.beans.PropertyChangeSupport
 import javax.swing.JComponent
@@ -469,8 +470,6 @@ class ExcalidrawFileEditor private constructor(
         jcefHost.addLoadEndListener {
             // AD-05: JCEF fires onLoadEnd on a JCEF-internal thread.
             // Route to EDT via invokeLater before touching VFS or UI.
-            val application = ApplicationManager.getApplication()
-
             val work: () -> Unit = {
                 // AD-04/AD-05: [document] owns the format-specific load protocol (plain
                 // JSON vs scene-embedded PNG, see SceneDocument); this call may complete
@@ -508,12 +507,7 @@ class ExcalidrawFileEditor private constructor(
                 // and surfaces as an IDE error dialog — intentional (A09: don't swallow unknowns).
             }
 
-            if (application != null) {
-                application.invokeLater(work)
-            } else {
-                // Test-mode fallback: invoke synchronously so assertions can observe results.
-                work()
-            }
+            runOnEdtOrNow(work)
         }
     }
 
@@ -586,16 +580,7 @@ class ExcalidrawFileEditor private constructor(
      * via Gson at the bridge layer — no raw string concatenation or code execution here.
      */
     fun onSceneChanged(scene: Scene) {
-        val work: () -> Unit = {
-            autosave.onSceneChanged(scene)
-        }
-
-        val application = ApplicationManager.getApplication()
-        if (application != null && !application.isDispatchThread) {
-            application.invokeLater(work)
-        } else {
-            work()
-        }
+        runOnEdtOrNow { autosave.onSceneChanged(scene) }
     }
 
     // -------------------------------------------------------------------------
