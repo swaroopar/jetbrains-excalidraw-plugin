@@ -206,13 +206,12 @@ class ExcalidrawSettingsConfigurable : Configurable {
     /**
      * Normalizes [ext]: trims whitespace, ensures a leading dot, converts to
      * lowercase. Returns an empty string for blank input so callers can skip it.
+     *
+     * ADR-E7-02: delegates to [ExcalidrawExtensionSettings.normalize] — the single
+     * owner of the normalization rule — rather than reimplementing it here, so the
+     * UI layer can never silently drift from the persisted-state copy.
      */
-    private fun normalizeExtension(ext: String): String {
-        val trimmed = ext.trim()
-        if (trimmed.isEmpty()) return ""
-        val dotted = if (trimmed.startsWith(".")) trimmed else ".$trimmed"
-        return dotted.lowercase()
-    }
+    private fun normalizeExtension(ext: String): String = ExcalidrawExtensionSettings.normalize(ext)
 
     // -------------------------------------------------------------------------
     // Companion — production constructor + createForTest factory
