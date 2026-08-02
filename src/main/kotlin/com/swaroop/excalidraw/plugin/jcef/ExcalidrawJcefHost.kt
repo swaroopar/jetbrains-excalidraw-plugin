@@ -10,6 +10,7 @@ import com.intellij.openapi.util.SystemInfo
 import com.intellij.ui.jcef.JBCefApp
 import com.intellij.ui.jcef.JBCefBrowser
 import com.intellij.ui.jcef.JcefShortcutProvider
+import com.swaroop.excalidraw.plugin.library.LibraryImport
 import com.swaroop.excalidraw.plugin.theme.ThemeMapper
 import com.swaroop.excalidraw.plugin.util.runOnEdtOrNow
 import org.cef.browser.CefBrowser
@@ -255,7 +256,7 @@ class ExcalidrawJcefHost private constructor(
                     targetFrameName: String?
                 ): Boolean {
                     val handler = onBrowseLibraries
-                    if (targetUrl != null && handler != null && targetUrl.contains("libraries.excalidraw.com")) {
+                    if (targetUrl != null && handler != null && LibraryImport.isLibraryBrowseRequest(targetUrl)) {
                         // "Browse libraries" → in-IDE library browser (round-trips the
                         // chosen library back into the editor). onBeforePopup runs on a CEF
                         // thread, not the EDT — opening a dialog / creating a JBCefBrowser
