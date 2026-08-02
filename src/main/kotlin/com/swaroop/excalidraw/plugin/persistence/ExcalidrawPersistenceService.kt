@@ -7,6 +7,7 @@ import com.intellij.openapi.editor.Document
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.diagnostic.Logger
+import com.swaroop.excalidraw.plugin.export.CanvasRenderer
 
 /**
  * The production [ScenePersistence] adapter: reads and writes `.excalidraw` files
@@ -93,8 +94,10 @@ class ExcalidrawPersistenceService : ScenePersistence {
      * Writes raw PNG bytes to [file] via [VirtualFile.setBinaryContent] inside a WriteAction.
      *
      * The [base64Png] parameter is a standard Base64-encoded string (no data-URL prefix).
-     * Decoding is performed by [java.util.Base64] — no string concatenation of untrusted
-     * data, no eval-equivalent (A03 compliance).
+     * Decoding is performed by [com.swaroop.excalidraw.plugin.export.CanvasRenderer] — the
+     * same decode path [com.swaroop.excalidraw.plugin.export.ExcalidrawExporter] uses for
+     * PNG export results — no string concatenation of untrusted data, no eval-equivalent
+     * (A03 compliance). Malformed Base64 logs a warning and skips the write.
      *
      * Uses [VirtualFile.setBinaryContent] rather than a Document/FileDocumentManager
      * approach because PNG is binary content that must not be re-encoded as text.
@@ -108,8 +111,12 @@ class ExcalidrawPersistenceService : ScenePersistence {
      */
     override fun writePngScene(file: VirtualFile, base64Png: String) {
         val app = requireApplication("writePngScene", file.path) ?: return
-        // A03: Base64 decoding of the payload — standard JVM decoder, no execution of content.
-        val bytes = java.util.Base64.getDecoder().decode(base64Png)
+        // A03: Base64 decoding via CanvasRenderer — the same decode path ExcalidrawExporter
+        // uses for PNG export results, so a decode bug only needs fixing once.
+        val bytes = CanvasRenderer.decodeBase64Png(base64Png) ?: run {
+            LOG.warn("ExcalidrawPersistenceService: invalid Base64 in PNG scene for '${file.path}' — discarding")
+            return
+        }
         // A05: binary write via VFS setBinaryContent inside WriteAction for undo-buffer
         // participation and thread-safety.  No java.io.File, no NIO.
         app.runWriteAction {

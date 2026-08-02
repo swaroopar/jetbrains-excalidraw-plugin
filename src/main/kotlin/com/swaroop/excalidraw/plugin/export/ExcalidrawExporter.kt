@@ -110,14 +110,10 @@ class ExcalidrawExporter private constructor(
         targetFile: VirtualFile
     ) {
         val bytes: ByteArray = when (result.format) {
-            "svg" -> result.data.toByteArray(Charsets.UTF_8)
-            "png" -> {
-                try {
-                    java.util.Base64.getDecoder().decode(result.data)
-                } catch (ex: IllegalArgumentException) {
-                    LOG.warn("ExcalidrawExporter: invalid Base64 in PNG export result — discarding", ex)
-                    return
-                }
+            "svg" -> CanvasRenderer.decodeSvg(result.data)
+            "png" -> CanvasRenderer.decodeBase64Png(result.data) ?: run {
+                LOG.warn("ExcalidrawExporter: invalid Base64 in PNG export result — discarding")
+                return
             }
             else -> {
                 LOG.warn("ExcalidrawExporter: unknown export format '${result.format}' — discarding")
