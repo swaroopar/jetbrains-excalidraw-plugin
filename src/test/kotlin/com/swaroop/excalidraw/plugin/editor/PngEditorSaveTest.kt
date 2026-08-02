@@ -4,7 +4,9 @@ import com.swaroop.excalidraw.plugin.bridge.ExcalidrawJsBridge
 import com.swaroop.excalidraw.plugin.persistence.Scene
 import com.swaroop.excalidraw.plugin.editor.autosave.ManualScheduler
 import com.swaroop.excalidraw.plugin.jcef.ExcalidrawJcefHost
+import com.swaroop.excalidraw.plugin.jcef.FakeCefBrowserHandle
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawPersistenceService
+import com.swaroop.excalidraw.plugin.persistence.ScenePersistence
 import com.intellij.openapi.vfs.VirtualFile
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -34,15 +36,21 @@ class PngEditorSaveTest {
     // -------------------------------------------------------------------------
 
     /**
-     * In-test fake for [ExcalidrawPersistenceService].
-     *
-     * Overrides both [writeScene] and [writePngScene] to record calls without
-     * requiring a live IntelliJ Application or FileDocumentManager.
+     * In-test [ScenePersistence] fake — satisfies the port directly instead of
+     * subclassing production code. Overrides both [writeScene] and [writePngScene]
+     * to record calls without requiring a live IntelliJ Application or
+     * FileDocumentManager; reads delegate to a real [ExcalidrawPersistenceService]
+     * since this test never exercises the read path.
      */
-    private class FakePersistenceService : ExcalidrawPersistenceService() {
+    private class FakePersistenceService(
+        private val real: ScenePersistence = ExcalidrawPersistenceService()
+    ) : ScenePersistence {
         var writePngSceneCallCount: Int = 0
         var writtenPngBytes: ByteArray? = null
         var writeSceneCallCount: Int = 0
+
+        override fun readScene(file: VirtualFile) = real.readScene(file)
+        override fun readSceneOrNew(file: VirtualFile) = real.readSceneOrNew(file)
 
         override fun writeScene(file: VirtualFile, scene: Scene) {
             writeSceneCallCount++
@@ -92,18 +100,12 @@ class PngEditorSaveTest {
         val fakePersistence = FakePersistenceService()
         val scheduler = ManualScheduler()
 
-        var editorHolder: ExcalidrawFileEditor? = null
-
         val capturedJs = mutableListOf<String>()
-        val bridge = ExcalidrawJsBridge.createForTest(
-            injector = { js -> capturedJs.add(js) },
-            sceneChangeHandler = { scene: Scene ->
-                editorHolder?.onSceneChanged(scene)
-            }
-        )
+        val bridge = ExcalidrawJsBridge.createForTest(injector = { js -> capturedJs.add(js) })
 
         val file = StubVirtualFile(fileName, pngBytes)
-        val stubHost = ExcalidrawJcefHost.createForTest()
+        val stubHostHandle = FakeCefBrowserHandle()
+        val stubHost = ExcalidrawJcefHost.createForTest(stubHostHandle)
 
         val editor = ExcalidrawFileEditor.createForTest(
             file = file,
@@ -114,14 +116,13 @@ class PngEditorSaveTest {
             scheduler = scheduler
         )
 
-        editorHolder = editor
         // Arm the PNG editor through the realistic open path: fire loadEnd, then deliver a
         // successful extraction. This arms the autosave controller and seeds the baseline
         // from the extracted scene (one __baseline__ element), so the empty-elements edit the
         // tests fire afterwards counts as a genuine change. Without this, autosave stays
         // disabled — a .excalidraw.png whose scene was never extracted must never be
         // overwritten.
-        stubHost.fireLoadEnd()
+        stubHostHandle.simulateLoadEnd()
         bridge.simulatePngExtracted(EXTRACTED_BASELINE_PAYLOAD)
         return TestEditor(editor, bridge, fakePersistence, scheduler)
     }
@@ -161,15 +162,10 @@ class PngEditorSaveTest {
 
         val file = StubVirtualFile("save.excalidraw.png",
             ByteArray(8) { i -> if (i == 0) 0x89.toByte() else 0 })
-        val stubHost = ExcalidrawJcefHost.createForTest()
+        val stubHostHandle = FakeCefBrowserHandle()
+        val stubHost = ExcalidrawJcefHost.createForTest(stubHostHandle)
 
-        var editorHolder: ExcalidrawFileEditor? = null
-        val bridgeForScene = ExcalidrawJsBridge.createForTest(
-            injector = { js -> capturedJs.add(js) },
-            sceneChangeHandler = { scene: Scene ->
-                editorHolder?.onSceneChanged(scene)
-            }
-        )
+        val bridgeForScene = ExcalidrawJsBridge.createForTest(injector = { js -> capturedJs.add(js) })
 
         val editor = ExcalidrawFileEditor.createForTest(
             file = file,
@@ -179,9 +175,8 @@ class PngEditorSaveTest {
             notifier = { _ -> },
             scheduler = scheduler
         )
-        editorHolder = editor
         // Arm via the realistic open path before exercising autosave.
-        stubHost.fireLoadEnd()
+        stubHostHandle.simulateLoadEnd()
         bridgeForScene.simulatePngExtracted(EXTRACTED_BASELINE_PAYLOAD)
 
         // Trigger a scene change so currentSceneJson is set
@@ -296,18 +291,13 @@ class PngEditorSaveTest {
         val notifierCalls = mutableListOf<String>()
         val fakePersistence = FakePersistenceService()
         val scheduler = ManualScheduler()
-        var editorHolder: ExcalidrawFileEditor? = null
 
-        val bridge = ExcalidrawJsBridge.createForTest(
-            injector = { _ -> },
-            sceneChangeHandler = { scene: Scene ->
-                editorHolder?.onSceneChanged(scene)
-            }
-        )
+        val bridge = ExcalidrawJsBridge.createForTest(injector = { _ -> })
 
         val file = StubVirtualFile("save.excalidraw.png",
             ByteArray(8) { i -> if (i == 0) 0x89.toByte() else 0 })
-        val stubHost = ExcalidrawJcefHost.createForTest()
+        val stubHostHandle = FakeCefBrowserHandle()
+        val stubHost = ExcalidrawJcefHost.createForTest(stubHostHandle)
 
         val editor = ExcalidrawFileEditor.createForTest(
             file = file,
@@ -317,9 +307,8 @@ class PngEditorSaveTest {
             notifier = { msg -> notifierCalls.add(msg) },
             scheduler = scheduler
         )
-        editorHolder = editor
         // Arm via the realistic open path before exercising autosave.
-        stubHost.fireLoadEnd()
+        stubHostHandle.simulateLoadEnd()
         bridge.simulatePngExtracted(EXTRACTED_BASELINE_PAYLOAD)
 
         // Set currentSceneJson
@@ -360,19 +349,14 @@ class PngEditorSaveTest {
     fun `autosave on excalidraw file uses writeScene not writePngScene`() {
         val fakePersistence = FakePersistenceService()
         val scheduler = ManualScheduler()
-        var editorHolder: ExcalidrawFileEditor? = null
 
-        val bridge = ExcalidrawJsBridge.createForTest(
-            injector = { _ -> },
-            sceneChangeHandler = { scene: Scene ->
-                editorHolder?.onSceneChanged(scene)
-            }
-        )
+        val bridge = ExcalidrawJsBridge.createForTest(injector = { _ -> })
 
         // Blank content: readSceneOrNew opens it as a fresh blank canvas, so fireLoadEnd()
         // below succeeds and arms the autosave controller.
         val file = StubVirtualFile("diagram.excalidraw", "".toByteArray(Charsets.UTF_8))
-        val stubHost = ExcalidrawJcefHost.createForTest()
+        val stubHostHandle = FakeCefBrowserHandle()
+        val stubHost = ExcalidrawJcefHost.createForTest(stubHostHandle)
 
         val editor = ExcalidrawFileEditor.createForTest(
             file = file,
@@ -382,8 +366,7 @@ class PngEditorSaveTest {
             notifier = { _ -> },
             scheduler = scheduler
         )
-        editorHolder = editor
-        stubHost.fireLoadEnd()
+        stubHostHandle.simulateLoadEnd()
         bridge.simulateSceneChange(BASELINE_PAYLOAD)
 
         val scenePayload =
@@ -426,20 +409,15 @@ class PngEditorSaveTest {
     fun `opening a scene-less png does not write the file`() {
         val fakePersistence = FakePersistenceService()
         val scheduler = ManualScheduler()
-        var editorHolder: ExcalidrawFileEditor? = null
 
-        val bridge = ExcalidrawJsBridge.createForTest(
-            injector = { _ -> },
-            sceneChangeHandler = { scene: Scene ->
-                editorHolder?.onSceneChanged(scene)
-            }
-        )
+        val bridge = ExcalidrawJsBridge.createForTest(injector = { _ -> })
 
         val file = StubVirtualFile(
             "foreign.excalidraw.png",
             ByteArray(8) { i -> if (i == 0) 0x89.toByte() else 0 }
         )
-        val stubHost = ExcalidrawJcefHost.createForTest()
+        val stubHostHandle = FakeCefBrowserHandle()
+        val stubHost = ExcalidrawJcefHost.createForTest(stubHostHandle)
 
         val editor = ExcalidrawFileEditor.createForTest(
             file = file,
@@ -449,10 +427,9 @@ class PngEditorSaveTest {
             notifier = { _ -> },
             scheduler = scheduler
         )
-        editorHolder = editor
 
         // Open path: loadEnd fires, extraction FAILS (no embedded scene) → blank canvas.
-        stubHost.fireLoadEnd()
+        stubHostHandle.simulateLoadEnd()
         bridge.simulatePngExtracted(
             """{"type":"pngExtracted","error":"No Excalidraw scene found"}"""
         )

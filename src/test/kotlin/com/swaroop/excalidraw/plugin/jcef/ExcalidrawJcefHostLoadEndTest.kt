@@ -1,130 +1,103 @@
 package com.swaroop.excalidraw.plugin.jcef
 
 import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
-import java.lang.reflect.Field
 
 /**
  * Unit tests for [ExcalidrawJcefHost.addLoadEndListener].
  *
- * JCEF runtime is not available in unit tests (no live IDE instance), so these tests
- * verify the listener-management logic directly via reflection — without instantiating
- * a real [com.intellij.ui.jcef.JBCefBrowser].
+ * JCEF runtime is not available in unit tests (no live IDE instance), so these tests drive
+ * the host through a [FakeCefBrowserHandle] passed to [ExcalidrawJcefHost.createForTest] —
+ * simulating `onLoadEnd`/`onLoadError` exactly as [JBCefBrowserHandle] would forward them
+ * from a real browser, with no reflection into the host's private state.
  *
  * Scenarios covered:
- *   1. Registering a listener stores it inside the host (verifiable via reflection).
- *   2. Simulating onLoadEnd invokes the listener exactly once.
- *   3. After dispose(), simulating onLoadEnd does NOT invoke the listener.
+ *   1. Registering a listener and simulating loadEnd invokes it exactly once.
+ *   2. A second simulated loadEnd does not re-invoke it (fire-once guard).
+ *   3. A scheme-not-ready retry (simulated load error) re-arms the guard so the retry's
+ *      own loadEnd fires the listener again.
+ *   4. After dispose(), simulating loadEnd does NOT invoke the listener.
  */
 class ExcalidrawJcefHostLoadEndTest {
 
     // ---------------------------------------------------------------------------
-    // Helpers — access internal state via reflection (no live JCEF needed)
-    // ---------------------------------------------------------------------------
-
-    /**
-     * Reads the private [ExcalidrawJcefHost.loadEndListeners] field via reflection.
-     * Returns the list (may be empty, must not be null).
-     */
-    @Suppress("UNCHECKED_CAST")
-    private fun getListeners(host: ExcalidrawJcefHost): List<() -> Unit> {
-        val field: Field = ExcalidrawJcefHost::class.java
-            .getDeclaredField("loadEndListeners")
-        field.isAccessible = true
-        return field.get(host) as List<() -> Unit>
-    }
-
-    /**
-     * Reads the private [ExcalidrawJcefHost.disposed] flag via reflection.
-     */
-    private fun isDisposed(host: ExcalidrawJcefHost): Boolean {
-        val field: Field = ExcalidrawJcefHost::class.java
-            .getDeclaredField("disposed")
-        field.isAccessible = true
-        return field.get(host) as Boolean
-    }
-
-    /**
-     * Calls the internal [ExcalidrawJcefHost.fireLoadEnd] method via reflection,
-     * simulating a JCEF onLoadEnd event without a real browser.
-     *
-     * Kotlin's `internal` visibility mangles the method name in the JVM bytecode to
-     * prevent accidental access from other modules. The public method takes zero
-     * parameters; we locate it by prefix and zero parameter count to distinguish it
-     * from Kotlin-generated lambda helper methods (which carry extra arguments).
-     */
-    private fun simulateLoadEnd(host: ExcalidrawJcefHost) {
-        val method = ExcalidrawJcefHost::class.java.declaredMethods
-            .first { it.name.startsWith("fireLoadEnd") && it.parameterCount == 0 }
-        method.isAccessible = true
-        method.invoke(host)
-    }
-
-    // ---------------------------------------------------------------------------
-    // Scenario 1 — Listener is stored after addLoadEndListener
-    // ---------------------------------------------------------------------------
-
-    @Test
-    fun `addLoadEndListener stores the listener in the host`() {
-        val host = ExcalidrawJcefHost.createForTest()
-        val listener: () -> Unit = {}
-
-        host.addLoadEndListener(listener)
-
-        val listeners = getListeners(host)
-        assertNotNull(listeners, "loadEndListeners must not be null")
-        assertTrue(listeners.contains(listener), "Listener must be stored in loadEndListeners after registration")
-    }
-
-    // ---------------------------------------------------------------------------
-    // Scenario 2 — Listener fires exactly once on simulated onLoadEnd
+    // Scenario 1 — Listener fires exactly once on simulated loadEnd
     // ---------------------------------------------------------------------------
 
     @Test
     fun `registered listener is invoked exactly once on simulated loadEnd`() {
-        val host = ExcalidrawJcefHost.createForTest()
+        val fakeHandle = FakeCefBrowserHandle()
+        val host = ExcalidrawJcefHost.createForTest(fakeHandle)
         var callCount = 0
         host.addLoadEndListener { callCount++ }
 
-        // Simulate onLoadEnd being fired by the JCEF engine.
-        // fireLoadEnd is internal but testable via reflection.
-        simulateLoadEnd(host)
+        fakeHandle.simulateLoadEnd()
 
         assertEquals(1, callCount, "Listener must be invoked exactly once on loadEnd")
     }
 
     @Test
     fun `listener is NOT invoked more than once when loadEnd fires multiple times`() {
-        val host = ExcalidrawJcefHost.createForTest()
+        val fakeHandle = FakeCefBrowserHandle()
+        val host = ExcalidrawJcefHost.createForTest(fakeHandle)
         var callCount = 0
         host.addLoadEndListener { callCount++ }
 
-        simulateLoadEnd(host)
-        simulateLoadEnd(host) // second fire must not re-invoke
+        fakeHandle.simulateLoadEnd()
+        fakeHandle.simulateLoadEnd() // second fire must not re-invoke
 
-        assertEquals(1, callCount, "Listener must fire at most once, even if onLoadEnd fires multiple times")
+        assertEquals(1, callCount, "Listener must fire at most once, even if loadEnd fires multiple times")
+    }
+
+    // ---------------------------------------------------------------------------
+    // Scenario 2 — Scheme-not-ready retry re-arms the fire-once guard
+    // ---------------------------------------------------------------------------
+
+    @Test
+    fun `a scheme-not-ready retry re-arms the listener so the reload's loadEnd re-fires`() {
+        // Models the scheme-not-ready startup race end to end, through the same
+        // CefBrowserHandle interface production uses: the initial load fails
+        // (ERR_UNKNOWN_URL_SCHEME-style error, already having fired loadEnd for its error
+        // page), which schedules a retry reload; that reload's own loadEnd must re-fire the
+        // registered listener — otherwise the first restored editor on IDE restart renders
+        // empty. FakeCefBrowserHandle.scheduleReload runs immediately, so this is synchronous.
+        val fakeHandle = FakeCefBrowserHandle()
+        val host = ExcalidrawJcefHost.createForTest(fakeHandle)
+        var callCount = 0
+        host.addLoadEndListener { callCount++ }
+
+        fakeHandle.simulateLoadEnd() // error page's own loadEnd
+        assertEquals(1, callCount)
+        fakeHandle.simulateLoadEnd() // still no-op (once-only guard)
+        assertEquals(1, callCount)
+
+        fakeHandle.simulateLoadError(isMainFrame = true, failedUrl = ExcalidrawJcefHost.START_URL)
+        assertTrue(
+            fakeHandle.loadedUrls.isNotEmpty(),
+            "A retry-worthy load error must reload the start URL: ${fakeHandle.loadedUrls}"
+        )
+        fakeHandle.simulateLoadEnd() // the reload's own loadEnd
+
+        assertEquals(2, callCount, "Listener must fire again after the scheme-retry re-arms it")
     }
 
     @Test
-    fun `armForReload re-arms the listener so the next loadEnd re-fires`() {
-        // Models the scheme-not-ready retry: the failed load's error page fired loadEnd
-        // (once), then we re-arm and reload — the successful reload's loadEnd must push
-        // the scene again, otherwise the first restored editor renders empty.
-        val host = ExcalidrawJcefHost.createForTest()
+    fun `a non-retry-worthy load error does not reload or re-arm`() {
+        val fakeHandle = FakeCefBrowserHandle()
+        val host = ExcalidrawJcefHost.createForTest(fakeHandle)
         var callCount = 0
         host.addLoadEndListener { callCount++ }
 
-        simulateLoadEnd(host)          // error page
-        assertEquals(1, callCount)
-        simulateLoadEnd(host)          // still no-op (once-only)
+        fakeHandle.simulateLoadEnd()
         assertEquals(1, callCount)
 
-        host.armForReload()            // re-arm before the retry reload
-        simulateLoadEnd(host)          // successful reload
+        // Not the excalidraw:// scheme — shouldRetrySchemeLoad returns false.
+        fakeHandle.simulateLoadError(isMainFrame = true, failedUrl = "https://example.com/")
+        assertTrue(fakeHandle.loadedUrls.isEmpty(), "A non-scheme load error must not trigger a reload")
 
-        assertEquals(2, callCount, "Listener must fire again after armForReload re-arms it")
+        fakeHandle.simulateLoadEnd()
+        assertEquals(1, callCount, "Without a retry, the fire-once guard must stay tripped")
     }
 
     // ---------------------------------------------------------------------------
@@ -133,22 +106,17 @@ class ExcalidrawJcefHostLoadEndTest {
 
     @Test
     fun `listener does NOT fire after dispose()`() {
-        val host = ExcalidrawJcefHost.createForTest()
+        val fakeHandle = FakeCefBrowserHandle()
+        val host = ExcalidrawJcefHost.createForTest(fakeHandle)
         var callCount = 0
         host.addLoadEndListener { callCount++ }
 
-        host.disposeForTest() // dispose without touching real JBCefBrowser
+        host.dispose() // dispose without touching a real browser (FakeCefBrowserHandle)
+        assertTrue(fakeHandle.disposed, "dispose() must delegate to the CefBrowserHandle")
 
-        simulateLoadEnd(host)
+        fakeHandle.simulateLoadEnd()
 
         assertEquals(0, callCount, "Listener must NOT fire after dispose()")
-    }
-
-    @Test
-    fun `disposed flag is true after disposeForTest()`() {
-        val host = ExcalidrawJcefHost.createForTest()
-        host.disposeForTest()
-        assertTrue(isDisposed(host), "disposed flag must be true after dispose()")
     }
 
     // ---------------------------------------------------------------------------

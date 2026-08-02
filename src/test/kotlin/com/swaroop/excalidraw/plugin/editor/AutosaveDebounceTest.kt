@@ -3,7 +3,9 @@ package com.swaroop.excalidraw.plugin.editor
 import com.swaroop.excalidraw.plugin.bridge.ExcalidrawJsBridge
 import com.swaroop.excalidraw.plugin.editor.autosave.ManualScheduler
 import com.swaroop.excalidraw.plugin.jcef.ExcalidrawJcefHost
+import com.swaroop.excalidraw.plugin.jcef.FakeCefBrowserHandle
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawPersistenceService
+import com.swaroop.excalidraw.plugin.persistence.ScenePersistence
 import com.swaroop.excalidraw.plugin.persistence.Scene
 import com.intellij.openapi.vfs.VirtualFile
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -41,19 +43,28 @@ class AutosaveDebounceTest {
     // -------------------------------------------------------------------------
 
     /**
-     * In-test fake for [ExcalidrawPersistenceService].
-     *
-     * Overrides [writeScene] to record calls without requiring a live IntelliJ
-     * Application or FileDocumentManager (no IDE APIs involved).
+     * In-test [ScenePersistence] fake — satisfies the port directly instead of
+     * subclassing production code. Overrides [writeScene] to record calls without
+     * requiring a live IntelliJ Application or FileDocumentManager (no IDE APIs
+     * involved); reads delegate to a real [ExcalidrawPersistenceService] since this
+     * test never exercises the read path.
      */
-    private class FakePersistenceService : ExcalidrawPersistenceService() {
+    private class FakePersistenceService(
+        private val real: ScenePersistence = ExcalidrawPersistenceService()
+    ) : ScenePersistence {
         var writeSceneCallCount: Int = 0
         var lastWrittenScene: Scene? = null
+
+        override fun readScene(file: VirtualFile) = real.readScene(file)
+        override fun readSceneOrNew(file: VirtualFile) = real.readSceneOrNew(file)
 
         override fun writeScene(file: VirtualFile, scene: Scene) {
             writeSceneCallCount++
             lastWrittenScene = scene
         }
+
+        override fun writePngScene(file: VirtualFile, base64Png: String) =
+            real.writePngScene(file, base64Png)
     }
 
     // -------------------------------------------------------------------------
@@ -71,19 +82,13 @@ class AutosaveDebounceTest {
         val fakePersistence = FakePersistenceService()
         val scheduler = ManualScheduler()
 
-        var editorHolder: ExcalidrawFileEditor? = null
-
-        val bridge = ExcalidrawJsBridge.createForTest(
-            injector = { _ -> },
-            sceneChangeHandler = { scene: Scene ->
-                editorHolder?.onSceneChanged(scene)
-            }
-        )
+        val bridge = ExcalidrawJsBridge.createForTest(injector = { _ -> })
 
         // Blank content: readSceneOrNew opens it as a fresh blank canvas (Scene.empty()),
         // so fireLoadEnd() below succeeds and arms the autosave controller (see AC-E4-01/AD-04).
         val file = StubVirtualFile("test.excalidraw", "".toByteArray(Charsets.UTF_8))
-        val host = ExcalidrawJcefHost.createForTest()
+        val hostHandle = FakeCefBrowserHandle()
+        val host = ExcalidrawJcefHost.createForTest(hostHandle)
 
         val editor = ExcalidrawFileEditor.createForTest(
             file = file,
@@ -94,10 +99,9 @@ class AutosaveDebounceTest {
             scheduler = scheduler
         )
 
-        editorHolder = editor
         // Real open path: arms the autosave controller (awaitEcho — plain JSON has no
         // separate load round-trip to consult) before any scene-change event can arrive.
-        host.fireLoadEnd()
+        hostHandle.simulateLoadEnd()
         // Establish the unedited baseline (mirrors the initial onChange Excalidraw
         // fires when a scene loads). Subsequent distinct scene changes are then
         // treated as real edits. Uses an element type none of the tests use so it

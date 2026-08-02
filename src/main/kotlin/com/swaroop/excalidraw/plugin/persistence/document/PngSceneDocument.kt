@@ -5,7 +5,7 @@ import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.vfs.VirtualFile
 import com.swaroop.excalidraw.plugin.bridge.ExcalidrawJsBridge
-import com.swaroop.excalidraw.plugin.persistence.ExcalidrawPersistenceService
+import com.swaroop.excalidraw.plugin.persistence.ScenePersistence
 import com.swaroop.excalidraw.plugin.persistence.Scene
 
 /**
@@ -19,7 +19,7 @@ import com.swaroop.excalidraw.plugin.persistence.Scene
  * that point would overwrite the file with canvas state unrelated to it.
  */
 class PngSceneDocument(
-    private val persistenceService: ExcalidrawPersistenceService
+    private val persistenceService: ScenePersistence
 ) : SceneDocument {
 
     @Volatile

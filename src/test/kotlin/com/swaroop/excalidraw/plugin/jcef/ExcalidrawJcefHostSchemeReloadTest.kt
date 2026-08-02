@@ -24,7 +24,7 @@ class ExcalidrawJcefHostSchemeReloadTest {
             host.shouldRetrySchemeLoad(isMainFrame = true, failedUrl = ExcalidrawJcefHost.START_URL),
             "A main-frame failure on the start URL must trigger a reload"
         )
-        host.disposeForTest()
+        host.dispose()
     }
 
     @Test
@@ -34,7 +34,7 @@ class ExcalidrawJcefHostSchemeReloadTest {
             host.shouldRetrySchemeLoad(isMainFrame = true, failedUrl = "excalidraw://app/sub/page.html"),
             "Any excalidraw:// main-frame failure must trigger a reload"
         )
-        host.disposeForTest()
+        host.dispose()
     }
 
     @Test
@@ -44,7 +44,7 @@ class ExcalidrawJcefHostSchemeReloadTest {
             host.shouldRetrySchemeLoad(isMainFrame = false, failedUrl = ExcalidrawJcefHost.START_URL),
             "Sub-frame failures must not trigger a reload"
         )
-        host.disposeForTest()
+        host.dispose()
     }
 
     @Test
@@ -58,13 +58,13 @@ class ExcalidrawJcefHostSchemeReloadTest {
             host.shouldRetrySchemeLoad(isMainFrame = true, failedUrl = null),
             "A null failed URL must not trigger a reload"
         )
-        host.disposeForTest()
+        host.dispose()
     }
 
     @Test
     fun `does not retry after dispose`() {
         val host = ExcalidrawJcefHost.createForTest()
-        host.disposeForTest()
+        host.dispose()
         assertFalse(
             host.shouldRetrySchemeLoad(isMainFrame = true, failedUrl = ExcalidrawJcefHost.START_URL),
             "A disposed host must not trigger a reload"
@@ -84,6 +84,6 @@ class ExcalidrawJcefHostSchemeReloadTest {
             host.shouldRetrySchemeLoad(isMainFrame = true, failedUrl = ExcalidrawJcefHost.START_URL),
             "Once the retry cap is exceeded, no further reloads are scheduled"
         )
-        host.disposeForTest()
+        host.dispose()
     }
 }

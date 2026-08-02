@@ -6,6 +6,7 @@ import com.intellij.openapi.vfs.VirtualFile
 import com.swaroop.excalidraw.plugin.bridge.ExcalidrawJsBridge
 import com.swaroop.excalidraw.plugin.editor.StubVirtualFile
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawPersistenceService
+import com.swaroop.excalidraw.plugin.persistence.ScenePersistence
 import com.swaroop.excalidraw.plugin.persistence.Scene
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -62,14 +63,22 @@ class JsonSceneDocumentTest {
     // save
     // -------------------------------------------------------------------------
 
-    private class RecordingPersistenceService : ExcalidrawPersistenceService() {
+    private class RecordingPersistenceService(
+        private val real: ScenePersistence = ExcalidrawPersistenceService()
+    ) : ScenePersistence {
         var writeSceneCallCount = 0
         var lastWrittenScene: Scene? = null
+
+        override fun readScene(file: VirtualFile) = real.readScene(file)
+        override fun readSceneOrNew(file: VirtualFile) = real.readSceneOrNew(file)
 
         override fun writeScene(file: VirtualFile, scene: Scene) {
             writeSceneCallCount++
             lastWrittenScene = scene
         }
+
+        override fun writePngScene(file: VirtualFile, base64Png: String) =
+            real.writePngScene(file, base64Png)
     }
 
     @Test

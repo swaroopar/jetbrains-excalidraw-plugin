@@ -42,19 +42,11 @@ class ExcalidrawExporter private constructor(
          * [com.intellij.openapi.application.ApplicationManager.getApplication().runWriteAction]
          * so the write participates in the IDE undo-buffer.
          *
-         * Falls back to a direct [VirtualFile.setBinaryContent] call when no
-         * ApplicationManager is available (e.g. in headless test contexts that
-         * accidentally call this factory — prefer [createForTest] in unit tests).
+         * Only ever invoked from a live IDE context — unit tests use [createForTest]
+         * instead, so no ApplicationManager-null fallback is needed here.
          */
         fun create(): ExcalidrawExporter = ExcalidrawExporter { file, bytes ->
-            val app = com.intellij.openapi.application.ApplicationManager.getApplication()
-            if (app != null) {
-                app.runWriteAction {
-                    file.setBinaryContent(bytes)
-                }
-            } else {
-                // Headless / no-Application context: direct write.
-                LOG.warn("ExcalidrawExporter: ApplicationManager not available, writing directly")
+            com.intellij.openapi.application.ApplicationManager.getApplication()!!.runWriteAction {
                 file.setBinaryContent(bytes)
             }
         }
@@ -118,14 +110,10 @@ class ExcalidrawExporter private constructor(
         targetFile: VirtualFile
     ) {
         val bytes: ByteArray = when (result.format) {
-            "svg" -> result.data.toByteArray(Charsets.UTF_8)
-            "png" -> {
-                try {
-                    java.util.Base64.getDecoder().decode(result.data)
-                } catch (ex: IllegalArgumentException) {
-                    LOG.warn("ExcalidrawExporter: invalid Base64 in PNG export result — discarding", ex)
-                    return
-                }
+            "svg" -> CanvasRenderer.decodeSvg(result.data)
+            "png" -> CanvasRenderer.decodeBase64Png(result.data) ?: run {
+                LOG.warn("ExcalidrawExporter: invalid Base64 in PNG export result — discarding")
+                return
             }
             else -> {
                 LOG.warn("ExcalidrawExporter: unknown export format '${result.format}' — discarding")

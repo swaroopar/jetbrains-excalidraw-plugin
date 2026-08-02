@@ -4,7 +4,9 @@ import com.intellij.openapi.vfs.VirtualFile
 import com.swaroop.excalidraw.plugin.bridge.ExcalidrawJsBridge
 import com.swaroop.excalidraw.plugin.persistence.Scene
 import com.swaroop.excalidraw.plugin.jcef.ExcalidrawJcefHost
+import com.swaroop.excalidraw.plugin.jcef.FakeCefBrowserHandle
 import com.swaroop.excalidraw.plugin.persistence.ExcalidrawPersistenceService
+import com.swaroop.excalidraw.plugin.persistence.ScenePersistence
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -33,17 +35,22 @@ class PngEditorIntegrationTest {
     // -------------------------------------------------------------------------
 
     /**
-     * In-test fake for [ExcalidrawPersistenceService].
-     *
-     * Overrides [writeScene] and [writePngScene] to record calls without
-     * requiring a live IntelliJ Application or VFS WriteAction.
-     * [writtenBytes] captures the decoded bytes produced by [writePngScene]
-     * so tests can verify the PNG magic byte.
+     * In-test [ScenePersistence] fake — satisfies the port directly instead of
+     * subclassing production code. Overrides [writeScene] and [writePngScene] to
+     * record calls without requiring a live IntelliJ Application or VFS WriteAction.
+     * [writtenBytes] captures the decoded bytes produced by [writePngScene] so tests
+     * can verify the PNG magic byte; reads delegate to a real
+     * [ExcalidrawPersistenceService] since this test never exercises the read path.
      */
-    private class FakePersistenceService : ExcalidrawPersistenceService() {
+    private class FakePersistenceService(
+        private val real: ScenePersistence = ExcalidrawPersistenceService()
+    ) : ScenePersistence {
         var writtenBytes: ByteArray? = null
         var writeSceneCallCount: Int = 0
         var writePngSceneCallCount: Int = 0
+
+        override fun readScene(file: VirtualFile) = real.readScene(file)
+        override fun readSceneOrNew(file: VirtualFile) = real.readSceneOrNew(file)
 
         override fun writeScene(file: VirtualFile, scene: Scene) {
             writeSceneCallCount++
@@ -94,7 +101,8 @@ class PngEditorIntegrationTest {
             injector = { js -> capturedJs.add(js) }
         )
         val file = StubVirtualFile("valid.excalidraw.png", stubPngBytes)
-        val stubHost = ExcalidrawJcefHost.createForTest()
+        val stubHostHandle = FakeCefBrowserHandle()
+        val stubHost = ExcalidrawJcefHost.createForTest(stubHostHandle)
         val fakePersistence = FakePersistenceService()
 
         val editor = ExcalidrawFileEditor.createForTest(
@@ -106,8 +114,7 @@ class PngEditorIntegrationTest {
         )
 
         // Simulate the JCEF loadEnd event — triggers the PNG async path
-        stubHost.fireLoadEnd()
-
+        stubHostHandle.simulateLoadEnd()
         assertTrue(
             capturedJs.any { "__excalidrawLoadPng__" in it },
             "After loadEnd on .excalidraw.png, capturedJs must contain '__excalidrawLoadPng__'. " +
@@ -152,16 +159,11 @@ class PngEditorIntegrationTest {
         val capturedJs = mutableListOf<String>()
         val fakePersistence = FakePersistenceService()
         val scheduler = com.swaroop.excalidraw.plugin.editor.autosave.ManualScheduler()
-        var editorHolder: ExcalidrawFileEditor? = null
 
-        val bridge = ExcalidrawJsBridge.createForTest(
-            injector = { js -> capturedJs.add(js) },
-            sceneChangeHandler = { scene: Scene ->
-                editorHolder?.onSceneChanged(scene)
-            }
-        )
+        val bridge = ExcalidrawJsBridge.createForTest(injector = { js -> capturedJs.add(js) })
         val file = StubVirtualFile("save.excalidraw.png", stubPngBytes)
-        val stubHost = ExcalidrawJcefHost.createForTest()
+        val stubHostHandle = FakeCefBrowserHandle()
+        val stubHost = ExcalidrawJcefHost.createForTest(stubHostHandle)
 
         val editor = ExcalidrawFileEditor.createForTest(
             file = file,
@@ -171,12 +173,11 @@ class PngEditorIntegrationTest {
             notifier = { _ -> },
             scheduler = scheduler
         )
-        editorHolder = editor
         // Arm the PNG editor through the realistic open path: loadEnd, then a successful
         // extraction whose scene has one __baseline__ element. This arms the autosave
         // controller and seeds the baseline, so the empty-elements edit below counts as
         // a real change.
-        stubHost.fireLoadEnd()
+        stubHostHandle.simulateLoadEnd()
         bridge.simulatePngExtracted(
             """{"type":"pngExtracted","sceneJson":${com.google.gson.Gson().toJson(
                 """{"type":"excalidraw","elements":[{"type":"__baseline__"}],"appState":{}}"""
@@ -238,16 +239,11 @@ class PngEditorIntegrationTest {
         val capturedNotifications = mutableListOf<String>()
         val fakePersistence = FakePersistenceService()
         val scheduler = com.swaroop.excalidraw.plugin.editor.autosave.ManualScheduler()
-        var editorHolder: ExcalidrawFileEditor? = null
 
-        val bridge = ExcalidrawJsBridge.createForTest(
-            injector = { js -> capturedJs.add(js) },
-            sceneChangeHandler = { scene: Scene ->
-                editorHolder?.onSceneChanged(scene)
-            }
-        )
+        val bridge = ExcalidrawJsBridge.createForTest(injector = { js -> capturedJs.add(js) })
         val file = StubVirtualFile("valid.excalidraw.png", stubPngBytes)
-        val stubHost = ExcalidrawJcefHost.createForTest()
+        val stubHostHandle = FakeCefBrowserHandle()
+        val stubHost = ExcalidrawJcefHost.createForTest(stubHostHandle)
 
         val editor = ExcalidrawFileEditor.createForTest(
             file = file,
@@ -257,11 +253,9 @@ class PngEditorIntegrationTest {
             notifier = { msg -> capturedNotifications.add(msg) },
             scheduler = scheduler
         )
-        editorHolder = editor
 
         // Simulate the JCEF loadEnd event
-        stubHost.fireLoadEnd()
-
+        stubHostHandle.simulateLoadEnd()
         // Simulate PNG extraction failure — no embedded Excalidraw scene
         bridge.simulatePngExtracted(
             """{"type":"pngExtracted","error":"No Excalidraw scene found in PNG"}"""

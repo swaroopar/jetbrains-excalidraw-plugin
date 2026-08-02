@@ -10,6 +10,7 @@ import com.intellij.ui.jcef.JBCefBrowser
 import com.intellij.ui.jcef.JBCefJSQuery
 import com.swaroop.excalidraw.plugin.export.ExportMessage
 import com.swaroop.excalidraw.plugin.persistence.Scene
+import com.swaroop.excalidraw.plugin.util.runOnEdtOrNow
 
 /**
  * ExcalidrawJsBridge — typed bidirectional channel between Kotlin and the
@@ -46,7 +47,7 @@ class ExcalidrawJsBridge private constructor(
     private val injector: (String) -> Unit,
     private val readyHandler: (String) -> Unit,
     private val jsQueryDispose: (() -> Unit)?,
-    private val sceneChangeHandler: (Scene) -> Unit = {},
+    sceneChangeHandler: (Scene) -> Unit = {},
     /**
      * Produces the JS expression that sends a payload string to the Kotlin
      * [JBCefJSQuery] handler.  In production this is [JBCefJSQuery.inject];
@@ -76,6 +77,13 @@ class ExcalidrawJsBridge private constructor(
 
     @Volatile
     private var disposed: Boolean = false
+
+    /**
+     * Backs [sceneChangeHandler] as a mutable slot so [registerSceneChangeHandler] can
+     * overwrite the constructor default after construction — see that method for why.
+     */
+    @Volatile
+    private var sceneChangeHandler: (Scene) -> Unit = sceneChangeHandler
 
     /**
      * One-shot callback slot for export results (JS→Kotlin, task-06-004). Set by
@@ -203,6 +211,22 @@ class ExcalidrawJsBridge private constructor(
     fun registerLibraryChangeCallback(cb: (String) -> Unit) {
         if (disposed) return
         libraryChangeCallback = cb
+    }
+
+    /**
+     * Overwrites the scene-change handler after construction.
+     *
+     * [com.swaroop.excalidraw.plugin.editor.ExcalidrawFileEditor]'s single wiring seam
+     * ([ExcalidrawFileEditor.assemble]) calls this once, right after building the editor
+     * instance from this bridge, to route [BridgeMessage.SceneChange] events to
+     * [ExcalidrawFileEditor.onSceneChanged] — without it, constructing the bridge (which
+     * needs the handler) and the editor (which needs the bridge) would be circular, forcing
+     * every caller to hand-roll a forward-reference workaround. After [dispose] this is a
+     * no-op.
+     */
+    fun registerSceneChangeHandler(handler: (Scene) -> Unit) {
+        if (disposed) return
+        sceneChangeHandler = handler
     }
 
     /**
@@ -593,9 +617,7 @@ class ExcalidrawJsBridge private constructor(
     private fun dispatch(rawJson: String, parsed: BridgeMessage?) {
         when (parsed) {
             is BridgeMessage.SceneChange -> {
-                ApplicationManager.getApplication()?.invokeLater {
-                    sceneChangeHandler(parsed.payload)
-                } ?: sceneChangeHandler(parsed.payload)   // fallback for unit-test context without Application
+                runOnEdtOrNow { sceneChangeHandler(parsed.payload) }
             }
             is BridgeMessage.ExportResult -> {
                 exportResultCallback.deliver(parsed.payload)
@@ -609,9 +631,7 @@ class ExcalidrawJsBridge private constructor(
             is BridgeMessage.LibraryChange -> {
                 val cb = libraryChangeCallback
                 if (cb != null) {
-                    ApplicationManager.getApplication()?.invokeLater {
-                        cb(parsed.libraryItemsJson)
-                    } ?: cb(parsed.libraryItemsJson)   // fallback for unit-test context without Application
+                    runOnEdtOrNow { cb(parsed.libraryItemsJson) }
                 }
             }
             is BridgeMessage.Ready, null -> {
@@ -899,16 +919,12 @@ private class OneShotCallback<T> {
 
     /**
      * If a callback is registered, clears the slot and invokes it with [value] exactly
-     * once — on the EDT via [ApplicationManager.getApplication].invokeLater, or directly
-     * if no [com.intellij.openapi.application.Application] is available (unit tests).
-     * A no-op if no callback is registered.
+     * once via [runOnEdtOrNow]. A no-op if no callback is registered.
      */
     fun deliver(value: T) {
         val cb = callback ?: return
         callback = null
-        ApplicationManager.getApplication()?.invokeLater {
-            cb(value)
-        } ?: cb(value)
+        runOnEdtOrNow { cb(value) }
     }
 
     /** Clears the slot without delivering, so a pending callback never fires. */

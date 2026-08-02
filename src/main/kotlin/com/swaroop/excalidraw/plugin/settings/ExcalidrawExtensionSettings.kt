@@ -5,6 +5,7 @@ import com.intellij.openapi.components.PersistentStateComponent
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
+import com.swaroop.excalidraw.plugin.filetype.ExcalidrawFileMatcher
 
 /**
  * Application-level persistent service that holds the list of file extensions
@@ -31,10 +32,12 @@ class ExcalidrawExtensionSettings : PersistentStateComponent<ExcalidrawExtension
      *
      * A plain class (not data class) with a no-arg constructor is required so
      * the IntelliJ XML deserializer can instantiate it reflectively. The default
-     * value of [extensions] satisfies AC-E7-02.
+     * value of [extensions] satisfies AC-E7-02 and is sourced from
+     * [ExcalidrawFileMatcher.DEFAULT_EXTENSIONS] — the single owner of the
+     * accepted-extension set (see [ExcalidrawFileMatcher] for why).
      */
     class State {
-        var extensions: MutableList<String> = mutableListOf(".excalidraw", ".excalidraw.png")
+        var extensions: MutableList<String> = ExcalidrawFileMatcher.DEFAULT_EXTENSIONS.toMutableList()
     }
 
     private var state: State = State()
@@ -110,23 +113,25 @@ class ExcalidrawExtensionSettings : PersistentStateComponent<ExcalidrawExtension
          */
         fun getInstance(): ExcalidrawExtensionSettings? =
             ApplicationManager.getApplication()?.getService(ExcalidrawExtensionSettings::class.java)
-    }
 
-    // -----------------------------------------------------------------------
-    // Private helpers
-    // -----------------------------------------------------------------------
-
-    /**
-     * Normalizes a file extension:
-     * 1. Trim surrounding whitespace.
-     * 2. Return empty string for blank input (caller skips it).
-     * 3. Ensure a leading dot (e.g. `"png"` → `".png"`).
-     * 4. Convert to lowercase.
-     */
-    private fun normalize(ext: String): String {
-        val trimmed = ext.trim()
-        if (trimmed.isEmpty()) return ""
-        val dotted = if (trimmed.startsWith(".")) trimmed else ".$trimmed"
-        return dotted.lowercase()
+        /**
+         * Normalizes a file extension:
+         * 1. Trim surrounding whitespace.
+         * 2. Return empty string for blank input (caller skips it).
+         * 3. Ensure a leading dot (e.g. `"png"` → `".png"`).
+         * 4. Convert to lowercase.
+         *
+         * `internal` (ADR-E7-02) so [ExcalidrawSettingsConfigurable], in the same
+         * `settings` package, can delegate to this single implementation instead of
+         * reimplementing the rule — the UI layer must not have its own copy of the
+         * normalization rule, since that would let it silently drift from the
+         * persisted-state copy.
+         */
+        internal fun normalize(ext: String): String {
+            val trimmed = ext.trim()
+            if (trimmed.isEmpty()) return ""
+            val dotted = if (trimmed.startsWith(".")) trimmed else ".$trimmed"
+            return dotted.lowercase()
+        }
     }
 }

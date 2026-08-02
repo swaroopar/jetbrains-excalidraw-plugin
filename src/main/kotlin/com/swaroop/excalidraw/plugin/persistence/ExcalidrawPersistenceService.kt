@@ -1,15 +1,17 @@
 package com.swaroop.excalidraw.plugin.persistence
 
+import com.intellij.openapi.application.Application
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.editor.Document
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.diagnostic.Logger
+import com.swaroop.excalidraw.plugin.export.CanvasRenderer
 
 /**
- * Service responsible for reading and writing `.excalidraw` files through the
- * IntelliJ Virtual File System.
+ * The production [ScenePersistence] adapter: reads and writes `.excalidraw` files
+ * through the IntelliJ Virtual File System.
  *
  * Secure-coding notes (A03 / A08):
  * - Uses Gson as the established, vetted JSON parser — no eval() or dynamic code.
@@ -17,10 +19,8 @@ import com.intellij.openapi.diagnostic.Logger
  *   (see [Scene.parseFile]).
  * - Write path uses IDE Document/VFS API exclusively — no java.io.File, no NIO.
  * - WriteAction ensures undo-buffer participation and IDE modified-state tracking.
- *
- * Declared as `open class` to allow subclassing in phase-07 (PNG embedding).
  */
-open class ExcalidrawPersistenceService {
+class ExcalidrawPersistenceService : ScenePersistence {
 
     companion object {
         private val LOG: Logger = Logger.getInstance(ExcalidrawPersistenceService::class.java)
@@ -38,7 +38,7 @@ open class ExcalidrawPersistenceService {
      * @throws ExcalidrawParseException if the content is empty, is not valid JSON,
      *         or is missing mandatory fields (elements, appState).
      */
-    fun readScene(file: VirtualFile): Scene {
+    override fun readScene(file: VirtualFile): Scene {
         val filePath = file.path
         val content: String = readContent(file)
         return Scene.parseFile(content, filePath)
@@ -53,7 +53,7 @@ open class ExcalidrawPersistenceService {
      * parse-error notification. Non-empty but malformed content still throws
      * [ExcalidrawParseException] so genuine corruption is surfaced.
      */
-    fun readSceneOrNew(file: VirtualFile): Scene {
+    override fun readSceneOrNew(file: VirtualFile): Scene {
         val filePath = file.path
         val content: String = readContent(file)
         return if (content.isBlank()) Scene.empty() else Scene.parseFile(content, filePath)
@@ -75,14 +75,8 @@ open class ExcalidrawPersistenceService {
      * @param file the VirtualFile to write; must be writable.
      * @param scene the scene to persist.
      */
-    open fun writeScene(file: VirtualFile, scene: Scene) {
-        val app = ApplicationManager.getApplication()
-        if (app == null) {
-            // Headless / plain-JUnit context: no Application available.
-            // FileDocumentManager.getInstance() would throw NPE; log and no-op.
-            LOG.warn("writeScene: no Application available for ${file.path} — skipping write")
-            return
-        }
+    override fun writeScene(file: VirtualFile, scene: Scene) {
+        val app = requireApplication("writeScene", file.path) ?: return
 
         val document: Document? = FileDocumentManager.getInstance().getDocument(file)
         if (document == null) {
@@ -100,8 +94,10 @@ open class ExcalidrawPersistenceService {
      * Writes raw PNG bytes to [file] via [VirtualFile.setBinaryContent] inside a WriteAction.
      *
      * The [base64Png] parameter is a standard Base64-encoded string (no data-URL prefix).
-     * Decoding is performed by [java.util.Base64] — no string concatenation of untrusted
-     * data, no eval-equivalent (A03 compliance).
+     * Decoding is performed by [com.swaroop.excalidraw.plugin.export.CanvasRenderer] — the
+     * same decode path [com.swaroop.excalidraw.plugin.export.ExcalidrawExporter] uses for
+     * PNG export results — no string concatenation of untrusted data, no eval-equivalent
+     * (A03 compliance). Malformed Base64 logs a warning and skips the write.
      *
      * Uses [VirtualFile.setBinaryContent] rather than a Document/FileDocumentManager
      * approach because PNG is binary content that must not be re-encoded as text.
@@ -113,16 +109,14 @@ open class ExcalidrawPersistenceService {
      * @param file the target [VirtualFile]; must be writable.
      * @param base64Png the PNG content as a standard Base64-encoded string.
      */
-    open fun writePngScene(file: VirtualFile, base64Png: String) {
-        val app = ApplicationManager.getApplication()
-        if (app == null) {
-            // Headless / plain-JUnit context: no Application available.
-            // VFS WriteAction would throw; log and no-op instead.
-            LOG.warn("writePngScene: no Application available for ${file.path} — skipping write")
+    override fun writePngScene(file: VirtualFile, base64Png: String) {
+        val app = requireApplication("writePngScene", file.path) ?: return
+        // A03: Base64 decoding via CanvasRenderer — the same decode path ExcalidrawExporter
+        // uses for PNG export results, so a decode bug only needs fixing once.
+        val bytes = CanvasRenderer.decodeBase64Png(base64Png) ?: run {
+            LOG.warn("ExcalidrawPersistenceService: invalid Base64 in PNG scene for '${file.path}' — discarding")
             return
         }
-        // A03: Base64 decoding of the payload — standard JVM decoder, no execution of content.
-        val bytes = java.util.Base64.getDecoder().decode(base64Png)
         // A05: binary write via VFS setBinaryContent inside WriteAction for undo-buffer
         // participation and thread-safety.  No java.io.File, no NIO.
         app.runWriteAction {
@@ -142,13 +136,26 @@ open class ExcalidrawPersistenceService {
      * @param document the target Document.
      * @param json the JSON string to set as document content.
      */
-    open fun writeSceneToDocument(document: Document, json: String) {
+    fun writeSceneToDocument(document: Document, json: String) {
         document.setText(json)
     }
 
     // -------------------------------------------------------------------------
     // Internal helpers
     // -------------------------------------------------------------------------
+
+    /**
+     * Returns the running [Application], or `null` (after logging a warning) when
+     * called in a headless / plain-JUnit context with no Application available —
+     * the signal for the caller to skip its write rather than crash.
+     */
+    private fun requireApplication(methodName: String, filePath: String): Application? {
+        val app = ApplicationManager.getApplication()
+        if (app == null) {
+            LOG.warn("$methodName: no Application available for $filePath — skipping write")
+        }
+        return app
+    }
 
     /**
      * Reads raw bytes from [file], using [ReadAction] when an IntelliJ Application
