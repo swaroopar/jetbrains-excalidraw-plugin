@@ -113,23 +113,25 @@ class ExcalidrawExtensionSettings : PersistentStateComponent<ExcalidrawExtension
          */
         fun getInstance(): ExcalidrawExtensionSettings? =
             ApplicationManager.getApplication()?.getService(ExcalidrawExtensionSettings::class.java)
-    }
 
-    // -----------------------------------------------------------------------
-    // Private helpers
-    // -----------------------------------------------------------------------
-
-    /**
-     * Normalizes a file extension:
-     * 1. Trim surrounding whitespace.
-     * 2. Return empty string for blank input (caller skips it).
-     * 3. Ensure a leading dot (e.g. `"png"` → `".png"`).
-     * 4. Convert to lowercase.
-     */
-    private fun normalize(ext: String): String {
-        val trimmed = ext.trim()
-        if (trimmed.isEmpty()) return ""
-        val dotted = if (trimmed.startsWith(".")) trimmed else ".$trimmed"
-        return dotted.lowercase()
+        /**
+         * Normalizes a file extension:
+         * 1. Trim surrounding whitespace.
+         * 2. Return empty string for blank input (caller skips it).
+         * 3. Ensure a leading dot (e.g. `"png"` → `".png"`).
+         * 4. Convert to lowercase.
+         *
+         * `internal` (ADR-E7-02) so [ExcalidrawSettingsConfigurable], in the same
+         * `settings` package, can delegate to this single implementation instead of
+         * reimplementing the rule — the UI layer must not have its own copy of the
+         * normalization rule, since that would let it silently drift from the
+         * persisted-state copy.
+         */
+        internal fun normalize(ext: String): String {
+            val trimmed = ext.trim()
+            if (trimmed.isEmpty()) return ""
+            val dotted = if (trimmed.startsWith(".")) trimmed else ".$trimmed"
+            return dotted.lowercase()
+        }
     }
 }
