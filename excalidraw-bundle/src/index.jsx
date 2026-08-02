@@ -24,6 +24,36 @@ function sendToKotlin(payload) {
 }
 
 /**
+ * renderPngBase64 — rasterises a scene to a Base64-encoded PNG string.
+ *
+ * The shared render step behind both window.__excalidrawExport__'s "png" branch
+ * (export-to-file, current live canvas state) and window.__excalidrawExportPng__
+ * (autosave re-embedding, a caller-supplied scene) — the two previously had
+ * near-identical exportToBlob + FileReader + strip-data-url-prefix logic, so a
+ * bug in that decode/encode path had to be fixed twice.
+ *
+ * Returns a Promise resolving to the Base64 string (no data-URL prefix).
+ */
+function renderPngBase64(elements, appState, files, scale) {
+  return exportToBlob({
+    elements: elements,
+    appState: appState,
+    files: files,
+    mimeType: "image/png",
+    scale: scale,
+  }).then(function (blob) {
+    return new Promise(function (resolve) {
+      var reader = new FileReader();
+      reader.onload = function (e) {
+        var dataUrl = e.target.result;
+        resolve(dataUrl.replace(/^data:[^;]+;base64,/, ""));
+      };
+      reader.readAsDataURL(blob);
+    });
+  });
+}
+
+/**
  * VALID_THEMES — whitelist of accepted theme values (A03: input validation).
  * Only "light" and "dark" are valid Excalidraw theme strings.
  * Any other value passed to window.__excalidrawSetTheme__ is silently ignored.
@@ -224,9 +254,8 @@ function App() {
      * - Retrieves scene elements, appState, and files from the Excalidraw API.
      * - For "svg": calls exportToSvg, serializes the SVGSVGElement via XMLSerializer,
      *   then posts the result to Kotlin via sendToKotlin.
-     * - For "png": calls exportToBlob, converts the Blob to a data URL via FileReader,
-     *   strips the "data:image/png;base64," prefix, then posts the Base64 string
-     *   to Kotlin via sendToKotlin.
+     * - For "png": delegates to renderPngBase64 (shared with window.__excalidrawExportPng__)
+     *   then posts the resulting Base64 string to Kotlin via sendToKotlin.
      * - Result JSON: { type: "exportResult", format: <format>, data: <serialized> }
      *
      * Security (A03):
@@ -255,20 +284,8 @@ function App() {
             sendToKotlin(JSON.stringify({ type: "exportResult", format: "svg", data: data }));
           });
       } else if (format === "png") {
-        exportToBlob({
-          elements: els,
-          appState: state,
-          files: files,
-          mimeType: "image/png",
-          scale: scale,
-        }).then(function (blob) {
-          var reader = new FileReader();
-          reader.onload = function (e) {
-            var dataUrl = e.target.result;
-            var base64 = dataUrl.replace(/^data:[^;]+;base64,/, "");
-            sendToKotlin(JSON.stringify({ type: "exportResult", format: "png", data: base64 }));
-          };
-          reader.readAsDataURL(blob);
+        renderPngBase64(els, state, files, scale).then(function (base64) {
+          sendToKotlin(JSON.stringify({ type: "exportResult", format: "png", data: base64 }));
         });
       }
     };
@@ -346,10 +363,10 @@ function App() {
     /**
      * window.__excalidrawExportPng__(sceneJson) — Kotlin->JS PNG-export channel.
      *
-     * Receives a scene JSON string, parses it, calls exportToBlob with
-     * exportEmbedScene:true to produce a PNG with the scene embedded, reads the
-     * result as a data URL via FileReader, strips the data: prefix, and posts the
-     * Base64 string back to Kotlin via sendToKotlin.
+     * Receives a scene JSON string, parses it, and delegates to renderPngBase64
+     * (shared with window.__excalidrawExport__'s "png" branch) with
+     * exportEmbedScene:true so the PNG carries the embedded scene, then posts the
+     * resulting Base64 string back to Kotlin via sendToKotlin.
      *
      * Security (A03):
      * - sceneJson is parsed via JSON.parse in try/catch — no eval(), no code exec.
@@ -368,22 +385,12 @@ function App() {
         // handed (it does NOT skip deleted ones). So drop deleted elements here —
         // otherwise "removed" elements keep showing up in the exported PNG.
         var elements = (scene.elements || []).filter(function (el) { return !el.isDeleted; });
-        exportToBlob({
-          elements: elements,
-          // exportEmbedScene is read from appState (NOT as a top-level option). The scene
-          // is embedded into the PNG only when the flag lives here; without it the saved
-          // .excalidraw.png carries no scene and re-opens as a blank canvas.
-          appState: Object.assign({}, scene.appState || {}, { exportEmbedScene: true }),
-          files: scene.files || {},
-          mimeType: "image/png",
-        }).then(function (blob) {
-          var reader = new FileReader();
-          reader.onload = function (e) {
-            var dataUrl = e.target.result;
-            var base64 = dataUrl.replace(/^data:[^;]+;base64,/, "");
-            sendToKotlin(JSON.stringify({ type: "pngExported", base64Png: base64 }));
-          };
-          reader.readAsDataURL(blob);
+        // exportEmbedScene is read from appState (NOT as a top-level option). The scene
+        // is embedded into the PNG only when the flag lives here; without it the saved
+        // .excalidraw.png carries no scene and re-opens as a blank canvas.
+        var appState = Object.assign({}, scene.appState || {}, { exportEmbedScene: true });
+        renderPngBase64(elements, appState, scene.files || {}, 1).then(function (base64) {
+          sendToKotlin(JSON.stringify({ type: "pngExported", base64Png: base64 }));
         }).catch(function (e) {
           sendToKotlin(JSON.stringify({
             type: "pngExported",
