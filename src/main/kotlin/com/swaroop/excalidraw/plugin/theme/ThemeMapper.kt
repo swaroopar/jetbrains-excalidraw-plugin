@@ -15,7 +15,7 @@ import com.intellij.ide.ui.LafManager
  * - [currentExcalidrawTheme] prefers [LafManager.getInstance().currentUIThemeLookAndFeel]
  *   `.isDark` — the platform's own authoritative dark/light flag (used internally by
  *   IntelliJ for icon/UI dark-mode decisions) — because under the modern "New UI"
- *   theme system, [LafManager.getCurrentLookAndFeel]'s `name` (legacy `UIManager
+ *   theme system, [LafManager.getCurrentUIThemeLookAndFeel]'s `name` (legacy `UIManager
  *   .LookAndFeelInfo`) does NOT reliably reflect the active color theme: many themes
  *   (custom marketplace themes, "Islands" variants, etc.) install under a generic LaF
  *   name that never contains "dark"/"darcula"/"contrast", which was observed to leave
@@ -86,7 +86,7 @@ object ThemeMapper {
         }
 
         val lafName = runCatching {
-            LafManager.getInstance()?.currentLookAndFeel?.name
+            LafManager.getInstance()?.currentUIThemeLookAndFeel?.name
         }.getOrNull()
         return lafToExcalidrawTheme(lafName)
     }

@@ -99,10 +99,38 @@ intellijPlatform {
     buildSearchableOptions = false
 }
 
-// localIdePath can be set in ~/.gradle/gradle.properties (never committed) for offline builds.
-// Example: localIdePath=/Applications/WebStorm.app/Contents
-// When absent, CI uses the remote WebStorm SDK declared in platformVersion.
 val localIdePath: String? = providers.gradleProperty("localIdePath").orNull
+    ?: run {
+        // Auto-detect a local JetBrains IDE when localIdePath is not explicitly set.
+        // Uses whichever IDE version is installed locally. Falls back to the
+        // configured platformVersion (2026.1) when no local IDE is found.
+        val home = System.getenv("HOME") ?: ""
+        listOf(
+            // macOS — standard install paths
+            "/Applications/WebStorm.app/Contents",
+            "/Applications/IntelliJ IDEA CE.app/Contents",
+            "/Applications/IntelliJ IDEA.app/Contents",
+            "/Applications/PyCharm CE.app/Contents",
+            "/Applications/PyCharm.app/Contents",
+            "/Applications/Rider.app/Contents",
+            "/Applications/GoLand.app/Contents",
+            "/Applications/CLion.app/Contents",
+            "/Applications/PhpStorm.app/Contents",
+            // macOS — Toolbox-managed installs
+            "$home/Library/Application Support/JetBrains/WebStorm",
+            "$home/Library/Application Support/JetBrains/IntelliJIdea",
+            "$home/Library/Application Support/JetBrains/IntelliJIdeaCE",
+            // Linux — snap and Toolbox
+            "$home/snap/jetbrains-webstorm/current",
+            "$home/snap/jetbrains-intellij-idea-ce/current",
+            "$home/.local/share/JetBrains/WebStorm",
+            // Windows (for WSL/cross-platform)
+            "C:/Program Files/JetBrains/WebStorm",
+            "C:/Program Files/JetBrains/IntelliJ IDEA",
+        ).firstOrNull { c ->
+            file(c).isDirectory && file("$c/bin").isDirectory
+        }
+    }
 
 dependencies {
     intellijPlatform {

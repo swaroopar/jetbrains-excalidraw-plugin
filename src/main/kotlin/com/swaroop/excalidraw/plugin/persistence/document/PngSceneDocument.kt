@@ -28,7 +28,7 @@ class PngSceneDocument(
     override fun load(file: VirtualFile, bridge: ExcalidrawJsBridge, onResult: (SceneLoadResult) -> Unit) {
         val application = ApplicationManager.getApplication()
         val bytes: ByteArray = if (application != null) {
-            ReadAction.compute<ByteArray, Throwable> { file.contentsToByteArray() }
+            ReadAction.nonBlocking<ByteArray> { file.contentsToByteArray() }.executeSynchronously()
         } else {
             file.contentsToByteArray()
         }

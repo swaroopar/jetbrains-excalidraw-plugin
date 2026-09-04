@@ -3,6 +3,8 @@ package com.swaroop.excalidraw.plugin.editor
 import com.intellij.notification.Notification
 import com.intellij.notification.NotificationType
 import com.intellij.notification.Notifications
+import com.intellij.ui.jcef.JBCefBrowserBase
+
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.fileEditor.FileEditor
@@ -258,12 +260,7 @@ class ExcalidrawFileEditor private constructor(
          */
         operator fun invoke(project: Project, file: VirtualFile): ExcalidrawFileEditor {
             val host = ExcalidrawJcefHost()
-            val browser = host.browserForBridge()
-
-            check(browser != null) {
-                "ExcalidrawJcefHost produced a null browser in production mode — " +
-                    "check JCEF availability (JBCefApp.isSupported) before opening the editor"
-            }
+            val browser: JBCefBrowserBase = requireNotNull(host.browserForBridge())
 
             val bridge = ExcalidrawJsBridge.create(browser = browser)
 

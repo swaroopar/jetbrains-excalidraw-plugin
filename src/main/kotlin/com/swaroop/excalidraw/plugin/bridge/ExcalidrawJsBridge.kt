@@ -6,6 +6,7 @@ import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.diagnostic.Logger
+import com.intellij.ui.jcef.JBCefBrowserBase
 import com.intellij.ui.jcef.JBCefBrowser
 import com.intellij.ui.jcef.JBCefJSQuery
 import com.swaroop.excalidraw.plugin.export.ExportMessage
@@ -820,7 +821,7 @@ class ExcalidrawJsBridge private constructor(
          *   web app posts a sceneChange event.
          */
         fun create(
-            browser: JBCefBrowser,
+            browser: JBCefBrowserBase,
             readyHandler: (String) -> Unit = {},
             sceneChangeHandler: (Scene) -> Unit = {}
         ): ExcalidrawJsBridge {
