@@ -76,6 +76,27 @@ class BridgeMessageTest {
     }
 
     @Test
+    fun `fromJson with sceneChange type carries files when present in the payload`() {
+        val json = """
+            {"type":"sceneChange","elements":[],"appState":{},"files":{"file-1":{"mimeType":"image/png"}}}
+        """.trimIndent()
+        val result = BridgeMessage.fromJson(json)
+        assertTrue(result is BridgeMessage.SceneChange)
+        val sceneChange = result as BridgeMessage.SceneChange
+        assertTrue(sceneChange.payload.files != null, "files must be parsed when present")
+        assertTrue(sceneChange.payload.files!!.has("file-1"))
+    }
+
+    @Test
+    fun `fromJson with sceneChange type and no files field defaults payload files to null`() {
+        val json = """{"type":"sceneChange","elements":[],"appState":{}}"""
+        val result = BridgeMessage.fromJson(json)
+        assertTrue(result is BridgeMessage.SceneChange)
+        val sceneChange = result as BridgeMessage.SceneChange
+        assertTrue(sceneChange.payload.files == null, "files must default to null when absent")
+    }
+
+    @Test
     fun `fromJson with unknown type returns null`() {
         val json = """{"type":"unknownType","data":"someValue"}"""
         val result = BridgeMessage.fromJson(json)
