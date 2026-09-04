@@ -134,12 +134,16 @@ data class Scene(
         }
 
         /**
-         * Lenient parse of a JS "sceneChange" bridge payload (`{"elements":[...],"appState":{...}}`,
-         * possibly with other fields the caller doesn't care about — e.g. a `type` discriminator
-         * consumed elsewhere). Returns `null` when the JSON is malformed, `elements` is missing
-         * or not an array, or `appState` is present but neither `null` nor an object. A `null` or
-         * missing `appState` defaults to an empty object (unlike the strict [parseFile], nothing
-         * else about a scene-change event implies a real, non-empty app state).
+         * Lenient parse of a JS "sceneChange" bridge payload
+         * (`{"elements":[...],"appState":{...},"files":{...}}`), possibly with other fields the
+         * caller doesn't care about — e.g. a `type` discriminator consumed elsewhere. Returns
+         * `null` when the JSON is malformed, `elements` is missing or not an array, or `appState`
+         * is present but neither `null` nor an object. A `null` or missing `appState` defaults to
+         * an empty object (unlike the strict [parseFile], nothing else about a scene-change event
+         * implies a real, non-empty app state). `files` is parsed the same way as
+         * [fromLenientJson] — present and a JSON object, or `null` when absent/invalid, so old
+         * bridge messages without a `files` field (e.g. cached from before this field existed)
+         * still parse without error.
          */
         fun fromBridgeJson(json: String): Scene? {
             return try {
@@ -152,13 +156,14 @@ data class Scene(
                     appStateEl.isJsonObject -> appStateEl.asJsonObject
                     else -> return null
                 }
+                val files = obj.get("files")?.takeIf { it.isJsonObject }?.asJsonObject
                 Scene(
                     type = "excalidraw",
                     version = 2,
                     source = null,
                     elements = elementsEl.asJsonArray,
                     appState = appState,
-                    files = null
+                    files = files
                 )
             } catch (_: JsonSyntaxException) {
                 null

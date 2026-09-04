@@ -193,6 +193,27 @@ class SceneTest {
         assertNull(Scene.fromBridgeJson("not-valid-json"))
     }
 
+    @Test
+    fun `fromBridgeJson with a files object parses it onto the returned Scene`() {
+        val json = """
+            {"elements":[],"appState":{},"files":{"file-1":{"mimeType":"image/png","dataURL":"data:image/png;base64,AAAA"}}}
+        """.trimIndent()
+        val result = Scene.fromBridgeJson(json)
+
+        assertNotNull(result)
+        assertNotNull(result!!.files)
+        assertTrue(result.files!!.has("file-1"))
+        assertEquals("image/png", result.files!!.getAsJsonObject("file-1").get("mimeType").asString)
+    }
+
+    @Test
+    fun `fromBridgeJson without a files field defaults files to null`() {
+        val result = Scene.fromBridgeJson("""{"elements":[],"appState":{}}""")
+
+        assertNotNull(result)
+        assertNull(result!!.files)
+    }
+
     // -------------------------------------------------------------------------
     // fromLenientJson — never-throwing, defaults everything (PNG extraction)
     // -------------------------------------------------------------------------

@@ -417,7 +417,7 @@ function App() {
         loadScene: false,
       },
     },
-    onChange: function (elements, appState) {
+    onChange: function (elements, appState, files) {
       // Self-healing theme guard: Excalidraw's own internal scene
       // initialization can asynchronously reset appState.theme back to its
       // default ("light") shortly after __excalidrawLoadScene__ correctly
@@ -429,7 +429,17 @@ function App() {
       if (appState && appState.theme !== themeRef.current && excalidrawAPIRef.current) {
         excalidrawAPIRef.current.updateScene({ appState: { theme: themeRef.current } });
       }
-      var payload = JSON.stringify({ type: "sceneChange", elements: elements, appState: appState });
+      // files (a BinaryFiles map of fileId -> {dataURL, mimeType, ...}) must be
+      // forwarded too, not just elements/appState -- otherwise the Kotlin side's
+      // tracked Scene loses any embedded raster images (e.g. pasted from another
+      // app) on the very next save, since window.__excalidrawExportPng__ renders
+      // from Kotlin's own Scene.files rather than the live canvas state.
+      var payload = JSON.stringify({
+        type: "sceneChange",
+        elements: elements,
+        appState: appState,
+        files: files,
+      });
       sendToKotlin(payload);
     },
     // Persist the library on every change (add/remove/reorder) so it survives IDE

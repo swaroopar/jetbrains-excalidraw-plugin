@@ -41,7 +41,7 @@ sealed class BridgeMessage {
      * JS→Kotlin: scene-change event posted by the Excalidraw web app whenever
      * the user edits the drawing (draw, move, delete, undo, redo).
      *
-     * The [payload] holds the scene state (elements + appState) as parsed
+     * The [payload] holds the scene state (elements + appState + files) as parsed
      * by [Scene.fromBridgeJson].
      */
     data class SceneChange(val payload: Scene) : BridgeMessage()
