@@ -8,6 +8,8 @@ import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.openapi.util.SystemInfo
 import com.intellij.ui.jcef.JBCefApp
+import com.intellij.ui.jcef.JBCefBrowserBase
+
 import com.intellij.ui.jcef.JBCefBrowser
 import com.intellij.ui.jcef.JcefShortcutProvider
 import com.swaroop.excalidraw.plugin.library.LibraryImport
@@ -529,7 +531,7 @@ class ExcalidrawJcefHost private constructor(
      * the reflection-based workaround in [ExcalidrawFileEditor.invoke]. It is the only
      * change to this file in task-02-007.
      */
-    internal fun browserForBridge(): JBCefBrowser? = browser
+    internal fun browserForBridge(): JBCefBrowserBase? = browser
 
     /**
      * [JBCefApp.JBCefCustomSchemeHandlerFactory] that delegates to

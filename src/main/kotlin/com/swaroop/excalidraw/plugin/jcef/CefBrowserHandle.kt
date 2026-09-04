@@ -1,11 +1,9 @@
 package com.swaroop.excalidraw.plugin.jcef
 
 import com.intellij.ui.jcef.JBCefBrowser
-import com.intellij.util.concurrency.EdtScheduledExecutorService
 import org.cef.browser.CefBrowser
 import org.cef.browser.CefFrame
 import org.cef.handler.CefLoadHandlerAdapter
-import java.util.concurrent.TimeUnit
 
 /**
  * Seam for the browser operations [ExcalidrawJcefHost]'s load lifecycle depends on:
@@ -94,6 +92,6 @@ internal class JBCefBrowserHandle(private val browser: JBCefBrowser) : CefBrowse
     }
 
     override fun scheduleReload(delayMs: Long, action: () -> Unit) {
-        EdtScheduledExecutorService.getInstance().schedule(action, delayMs, TimeUnit.MILLISECONDS)
+        javax.swing.Timer(delayMs.toInt(), java.awt.event.ActionListener { action() }).apply { isRepeats = false }.start()
     }
 }

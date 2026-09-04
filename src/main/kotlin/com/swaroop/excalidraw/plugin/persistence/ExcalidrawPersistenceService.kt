@@ -104,7 +104,7 @@ class ExcalidrawPersistenceService : ScenePersistence {
      * No java.io.File, no NIO — all I/O goes through the IntelliJ VFS layer (A05).
      *
      * If [ApplicationManager.getApplication] returns null (headless / plain-JUnit context),
-     * the method logs a warning and skips the write rather than throwing.
+     * the method logs a warning and skips to write rather than throwing.
      *
      * @param file the target [VirtualFile]; must be writable.
      * @param base64Png the PNG content as a standard Base64-encoded string.
@@ -163,7 +163,7 @@ class ExcalidrawPersistenceService : ScenePersistence {
      */
     private fun readContent(file: VirtualFile): String {
         val bytes: ByteArray = if (ApplicationManager.getApplication() != null) {
-            ReadAction.compute<ByteArray, Throwable> { file.contentsToByteArray() }
+            ReadAction.nonBlocking<ByteArray> { file.contentsToByteArray() }.executeSynchronously()
         } else {
             // Unit-test context: no running ApplicationManager; read bytes directly.
             file.contentsToByteArray()
